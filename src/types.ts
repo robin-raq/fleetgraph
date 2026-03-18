@@ -15,9 +15,11 @@ export interface FleetRequestInput {
   context?: RouteContext;
 }
 
+export type FindingCategory = "stale_issue" | "sprint_health" | "unassigned_high_priority" | "missed_standup";
+
 export interface Finding {
   id: string;
-  category: "stale_issue" | "sprint_health";
+  category: FindingCategory;
   severity: Exclude<Severity, "clean">;
   title: string;
   detail: string;
@@ -38,9 +40,18 @@ export interface ShipIssue {
   id: string;
   title: string;
   state?: string;
+  priority?: string | null;
   assignee_id?: string | null;
   assignee_name?: string | null;
   updated_at?: string;
+  created_at?: string;
+}
+
+export interface ShipStandup {
+  id: string;
+  user_id: string;
+  user_name?: string;
+  week_id: string;
   created_at?: string;
 }
 

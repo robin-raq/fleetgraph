@@ -1,4 +1,7 @@
-import type { Finding, Severity, ShipIssue, ShipWeek } from "./types";
+import type { Finding, Severity, ShipIssue, ShipStandup, ShipWeek } from "./types";
+
+const DONE_STATES = ["done", "cancelled"];
+const HIGH_PRIORITIES = ["high", "urgent", "critical"];
 
 export function toDate(dateLike?: string): Date | null {
   if (!dateLike) return null;
@@ -48,6 +51,49 @@ export function sprintHealthFindings(weeks: ShipWeek[], issues: ShipIssue[], now
       entityIds: [activeWeek.id]
     }
   ];
+}
+
+export function unassignedHighPriorityFindings(issues: ShipIssue[]): Finding[] {
+  return issues
+    .filter((issue) => {
+      const priority = (issue.priority ?? "").toLowerCase();
+      const state = (issue.state ?? "").toLowerCase();
+      return (
+        HIGH_PRIORITIES.includes(priority) &&
+        !issue.assignee_id &&
+        !DONE_STATES.includes(state)
+      );
+    })
+    .slice(0, 10)
+    .map((issue) => ({
+      id: `unassigned-hp-${issue.id}`,
+      category: "unassigned_high_priority" as const,
+      severity: "critical" as const,
+      title: `Unassigned high-priority: ${issue.title}`,
+      detail: `Issue ${issue.id} is ${issue.priority} priority but has no assignee.`,
+      entityIds: [issue.id]
+    }));
+}
+
+export function missedStandupFindings(
+  activeWeek: ShipWeek,
+  standups: ShipStandup[],
+  teamMembers: { id: string; name: string }[]
+): Finding[] {
+  if (teamMembers.length === 0) return [];
+
+  const submittedUserIds = new Set(standups.map((s) => s.user_id));
+
+  return teamMembers
+    .filter((member) => !submittedUserIds.has(member.id))
+    .map((member) => ({
+      id: `missed-standup-${activeWeek.id}-${member.id}`,
+      category: "missed_standup" as const,
+      severity: "info" as const,
+      title: `Missed standup: ${member.name}`,
+      detail: `${member.name} has not submitted a standup for ${activeWeek.title ?? activeWeek.id}.`,
+      entityIds: [member.id, activeWeek.id]
+    }));
 }
 
 export function computeSeverity(findings: Finding[]): Severity {

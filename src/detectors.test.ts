@@ -1,6 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { toDate, staleIssueFindings, sprintHealthFindings, computeSeverity } from "./detectors";
-import type { Finding, ShipIssue, ShipWeek } from "./types";
+import {
+  toDate,
+  staleIssueFindings,
+  sprintHealthFindings,
+  unassignedHighPriorityFindings,
+  missedStandupFindings,
+  computeSeverity
+} from "./detectors";
+import type { Finding, ShipIssue, ShipStandup, ShipWeek } from "./types";
 
 // Fixed "now" for deterministic tests: 2026-03-17T12:00:00Z
 const NOW = new Date("2026-03-17T12:00:00Z").getTime();
@@ -178,5 +185,130 @@ describe("computeSeverity", () => {
       { id: "1", category: "stale_issue", severity: "info", title: "", detail: "", entityIds: [] },
     ];
     expect(computeSeverity(findings)).toBe("info");
+  });
+});
+
+// ─────────────────────────────────────────────
+// Unassigned High-Priority Detector
+// ─────────────────────────────────────────────
+
+describe("unassignedHighPriorityFindings", () => {
+  it("flags high-priority issues with no assignee", () => {
+    const issues: ShipIssue[] = [
+      { id: "1", title: "Critical bug", state: "todo", priority: "high", assignee_id: null },
+    ];
+    const findings = unassignedHighPriorityFindings(issues);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].category).toBe("unassigned_high_priority");
+    expect(findings[0].severity).toBe("critical");
+    expect(findings[0].entityIds).toContain("1");
+  });
+
+  it("flags urgent-priority issues with no assignee", () => {
+    const issues: ShipIssue[] = [
+      { id: "1", title: "Prod down", state: "todo", priority: "urgent", assignee_id: null },
+    ];
+    const findings = unassignedHighPriorityFindings(issues);
+    expect(findings).toHaveLength(1);
+  });
+
+  it("ignores high-priority issues that have an assignee", () => {
+    const issues: ShipIssue[] = [
+      { id: "1", title: "Has owner", state: "todo", priority: "high", assignee_id: "user-1", assignee_name: "Alice" },
+    ];
+    const findings = unassignedHighPriorityFindings(issues);
+    expect(findings).toHaveLength(0);
+  });
+
+  it("ignores low/medium priority unassigned issues", () => {
+    const issues: ShipIssue[] = [
+      { id: "1", title: "Nice to have", state: "todo", priority: "low", assignee_id: null },
+      { id: "2", title: "Medium task", state: "todo", priority: "medium", assignee_id: null },
+    ];
+    const findings = unassignedHighPriorityFindings(issues);
+    expect(findings).toHaveLength(0);
+  });
+
+  it("ignores done issues even if high priority and unassigned", () => {
+    const issues: ShipIssue[] = [
+      { id: "1", title: "Already done", state: "done", priority: "high", assignee_id: null },
+    ];
+    const findings = unassignedHighPriorityFindings(issues);
+    expect(findings).toHaveLength(0);
+  });
+
+  it("handles missing priority gracefully (no flag)", () => {
+    const issues: ShipIssue[] = [
+      { id: "1", title: "No priority", state: "todo", assignee_id: null },
+    ];
+    const findings = unassignedHighPriorityFindings(issues);
+    expect(findings).toHaveLength(0);
+  });
+
+  it("is case-insensitive for priority values", () => {
+    const issues: ShipIssue[] = [
+      { id: "1", title: "CAPS", state: "todo", priority: "HIGH", assignee_id: null },
+    ];
+    const findings = unassignedHighPriorityFindings(issues);
+    expect(findings).toHaveLength(1);
+  });
+});
+
+// ─────────────────────────────────────────────
+// Missed Standup Detector
+// ─────────────────────────────────────────────
+
+describe("missedStandupFindings", () => {
+  const teamMembers = [
+    { id: "user-1", name: "Alice" },
+    { id: "user-2", name: "Bob" },
+    { id: "user-3", name: "Charlie" },
+  ];
+
+  const activeWeek: ShipWeek = {
+    id: "week-1",
+    title: "Sprint 5",
+    status: "active",
+    start_date: daysAgo(5),
+    end_date: new Date(NOW + 2 * 24 * 60 * 60 * 1000).toISOString(),
+  };
+
+  it("flags team members who have not submitted a standup", () => {
+    const standups: ShipStandup[] = [
+      { id: "s1", user_id: "user-1", user_name: "Alice", week_id: "week-1" },
+      // Bob and Charlie missing
+    ];
+    const findings = missedStandupFindings(activeWeek, standups, teamMembers);
+    expect(findings).toHaveLength(2);
+    expect(findings[0].category).toBe("missed_standup");
+    expect(findings[0].severity).toBe("info");
+    expect(findings.some((f) => f.title.includes("Bob"))).toBe(true);
+    expect(findings.some((f) => f.title.includes("Charlie"))).toBe(true);
+  });
+
+  it("returns empty when everyone submitted standups", () => {
+    const standups: ShipStandup[] = [
+      { id: "s1", user_id: "user-1", user_name: "Alice", week_id: "week-1" },
+      { id: "s2", user_id: "user-2", user_name: "Bob", week_id: "week-1" },
+      { id: "s3", user_id: "user-3", user_name: "Charlie", week_id: "week-1" },
+    ];
+    const findings = missedStandupFindings(activeWeek, standups, teamMembers);
+    expect(findings).toHaveLength(0);
+  });
+
+  it("returns empty when team is empty", () => {
+    const standups: ShipStandup[] = [];
+    const findings = missedStandupFindings(activeWeek, standups, []);
+    expect(findings).toHaveLength(0);
+  });
+
+  it("flags all members when no standups exist", () => {
+    const findings = missedStandupFindings(activeWeek, [], teamMembers);
+    expect(findings).toHaveLength(3);
+  });
+
+  it("includes the week title in finding detail", () => {
+    const findings = missedStandupFindings(activeWeek, [], teamMembers);
+    expect(findings[0].detail).toContain("Sprint 5");
   });
 });
