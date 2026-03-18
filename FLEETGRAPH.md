@@ -2,50 +2,209 @@
 
 ## Agent Responsibility
 
-FleetGraph monitors Ship project execution quality and surfaces actionable findings with evidence. It does not modify Ship data autonomously. Any action that could notify or change team workflow passes a human-approval gate.
+FleetGraph is a project intelligence agent for Ship that monitors project execution quality and surfaces actionable findings backed by evidence. It operates in two modes through a single graph architecture:
 
-## Use Cases (MVP + Near-Term)
+**Proactive mode (agent pushes):**
+- Monitors project state on a schedule (polling every 30 minutes during business hours)
+- Detects stale issues (no activity for 3+ days), sprint health risks (too many open issues near sprint end), and unassigned high-priority work
+- Surfaces findings to the team with specific entity references (issue IDs, sprint names, assignee names)
+- All findings pass through a human-in-the-loop approval gate before any downstream notification
 
-1. Stale issue detection (proactive)
-2. Sprint health risk detection (proactive)
-3. Route-aware "what should I focus on" guidance (on-demand)
-4. Context summary for current issue/project/sprint view (on-demand)
-5. Approval queue for proposed notifications/escalations (HITL)
+**On-demand mode (user pulls):**
+- Invoked from within Ship's UI via an embedded chat interface
+- Context-aware: knows what page the user is viewing (issue, sprint, project, dashboard) and scopes its reasoning accordingly
+- Answers questions like "What should I focus on today?", "What's blocking this sprint?", or "Who's overloaded?"
+- Uses the same fetch → analyze → reason pipeline, but routes to a conversational response node instead of HITL gate
 
-## Graph Model
+**Autonomous actions (no human needed):**
+- Fetching data from Ship REST API
+- Analyzing patterns and computing severity levels
+- Generating summaries and answering chat questions
+- Logging findings and creating approval records
 
-```text
-START
-  -> fetch (Ship API: issues + weeks)
-  -> analyze (stale + sprint risk checks)
-  -> [if findings > 0] hitlPath -> END
-     [else]           cleanPath -> END
+**Requires human approval before:**
+- Notifying team members about detected problems
+- Reassigning work or changing sprint scope
+- Escalating issues to leadership
+- Any action that modifies Ship data or sends communications
+
+**How on-demand mode uses context:**
+- The `context` object carries `pathname`, `entityType`, and `entityId` from the user's current Ship view
+- This context is injected into the LLM system prompt so the agent knows what the user is looking at
+- Example: a user on `/projects/abc/sprints/123` triggers context `{entityType: "sprint", entityId: "123"}` — the agent focuses its answer on that sprint
+
+---
+
+## Graph Diagram
+
+```mermaid
+graph TD
+    START(("__start__")) --> fetch["fetch\n(Ship API: issues + weeks\nin parallel)"]
+    fetch --> analyze["analyze\n(stale issues + sprint health\nrule-based detection)"]
+    analyze -->|"mode=proactive\nfindings > 0"| hitlPath["hitlPath\n(LLM summary + create\napproval record)"]
+    analyze -->|"mode=proactive\nfindings = 0"| cleanPath["cleanPath\n(LLM summary:\nall clear)"]
+    analyze -->|"mode=on_demand"| respondToUser["respondToUser\n(LLM answers user question\nwith project data context)"]
+    hitlPath --> END(("__end__"))
+    cleanPath --> END
+    respondToUser --> END
 ```
 
-- `cleanPath`: returns clean summary and no approval requirement
-- `hitlPath`: returns findings, creates approval record, marks `needsApproval=true`
+### Node Types
 
-This guarantees at least two trace paths in LangSmith:
-- `clean_path`
-- `hitl_path`
+| Node | Type | Description |
+|------|------|-------------|
+| `fetch` | **Fetch** | Pulls issues and weeks from Ship REST API in parallel via `Promise.all` |
+| `analyze` | **Reasoning (rule-based)** | Applies stale-issue and sprint-health detection rules. Computes severity. |
+| `cleanPath` | **Action** | LLM summarizes the clean state. No approval needed. |
+| `hitlPath` | **Action + HITL gate** | LLM summarizes findings. Creates an approval record that must be approved/rejected before any downstream notification. |
+| `respondToUser` | **Reasoning (LLM)** | LLM answers the user's question using fetched Ship data as context. |
+
+### Conditional Edges
+
+| From | Condition | To |
+|------|-----------|-----|
+| `analyze` | `mode === "on_demand"` | `respondToUser` |
+| `analyze` | `mode === "proactive" && findings.length > 0` | `hitlPath` |
+| `analyze` | `mode === "proactive" && findings.length === 0` | `cleanPath` |
+
+### State Schema
+
+```typescript
+{
+  input: FleetRequestInput,   // mode, target, message?, context?
+  issues: ShipIssue[],        // fetched from Ship API
+  weeks: ShipWeek[],          // fetched from Ship API
+  findings: Finding[],        // detected problems
+  severity: Severity,         // "critical" | "warning" | "info" | "clean"
+  summary: string,            // LLM-generated summary
+  tracePath: string,          // "clean_path" | "hitl_path" | "on_demand_path"
+  needsApproval: boolean,     // whether HITL gate was triggered
+  approvalId?: string,        // UUID of approval record
+  chatResponse?: string       // on-demand conversational answer
+}
+```
+
+---
+
+## Use Cases
+
+| # | Role | Trigger | Agent Detects / Produces | Human Decides |
+|---|------|---------|--------------------------|---------------|
+| 1 | PM | Proactive (cron every 30 min) | Stale issues — open issues with no activity for 3+ days, lists specific issue titles and assignees | Whether to ping assignees or reprioritize |
+| 2 | PM | Proactive (cron every 30 min) | Sprint health risk — too many open issues with < 3 days remaining in active sprint | Whether to cut scope, extend sprint, or reassign work |
+| 3 | Engineer | On-demand (chat from dashboard) | "What should I focus on today?" — prioritized list of assigned issues by urgency and staleness | Which task to start working on |
+| 4 | Director | On-demand (chat from project view) | Project health summary — open issue count, sprint progress, detected risks | Whether to escalate to leadership or intervene |
+| 5 | PM | Proactive (cron every 30 min) | Unassigned high-priority issues — issues marked high/critical priority with no assignee | Whether to assign or defer |
+
+---
 
 ## Trigger Model
 
-- **On-demand**: `POST /api/chat` from embedded Ship panel
-- **Proactive**: `POST /api/proactive/run` (manual or Railway cron)
-- **Scheduled**: optional in-process cron when `ENABLE_PROACTIVE_CRON=true`
+**Decision: Polling (cron-based)**
 
-## Targeting Model
+FleetGraph uses a polling trigger model — a cron job runs the proactive graph every 30 minutes during business hours (Mon-Fri, 8am-6pm).
 
-FleetGraph supports both Ship environments:
-- `target=local` -> `SHIP_API_BASE_URL_LOCAL` + `SHIP_API_TOKEN_LOCAL`
-- `target=prod` -> `SHIP_API_BASE_URL_PROD` + `SHIP_API_TOKEN_PROD`
+### Why polling?
+
+| Approach | Pros | Cons |
+|----------|------|------|
+| **Polling (chosen)** | Simple to implement; works with any API; no Ship code changes needed; predictable cost | Higher latency (up to 30 min); redundant calls when nothing changed |
+| Webhook | Real-time detection; no wasted calls | Ship has no webhook system; would require Ship codebase changes; harder to deploy |
+| Hybrid | Best of both worlds | Highest complexity; still needs Ship webhook support |
+
+**Ship does not expose webhooks**, so polling is the only viable option without modifying the Ship codebase. A 30-minute poll interval keeps detection latency well under the PRD's 5-minute goal (worst case: an event happens right after a poll, detected 30 min later — still far faster than manual review cycles).
+
+### Cost at scale
+
+| Scale | Proactive runs/day | On-demand runs/day | Total runs/day | Est. LLM cost/day |
+|-------|--------------------|--------------------|----------------|--------------------|
+| 1 workspace (MVP) | ~20 | ~50 | ~70 | ~$0.05 |
+| 100 projects | ~4,800 | ~500 | ~5,300 | ~$3.20 |
+| 1,000 projects | ~48,000 | ~5,000 | ~53,000 | ~$32.00 |
+
+Assumptions: 20 polls/day per project (business hours), ~1K tokens per run at GPT-4o-mini pricing ($0.15/$0.60 per 1M tokens).
+
+### Configuration
+
+```
+ENABLE_PROACTIVE_CRON=true
+PROACTIVE_CRON=0,30 8-18 * * 1-5
+```
+
+---
 
 ## HITL Model
 
-When findings exist, FleetGraph creates an approval record:
-- `GET /api/approvals?status=pending`
-- `POST /api/approvals/:id` with `decision=approved|rejected`
+When the proactive graph detects findings (severity > clean), it creates an **approval record** instead of taking action:
 
-No downstream notification action is executed until approved.
+1. `hitlPath` node creates an approval via `createApproval(target, findings)`
+2. The approval is stored in-memory with status `"pending"`
+3. The API exposes:
+   - `GET /api/approvals?status=pending` — list pending approvals
+   - `POST /api/approvals/:id` with `{decision: "approved" | "rejected"}` — resolve an approval
+4. No downstream action (notification, reassignment) executes until the human approves
 
+This ensures the agent **never acts on its own** for consequential actions. It observes, reasons, and proposes — the human decides.
+
+---
+
+## Test Cases
+
+| # | Ship State | Expected Output | Trace Link |
+|---|------------|-----------------|------------|
+| 1 | Multiple issues with no activity for 3+ days (real Ship prod data) | Agent detects 8 stale issues, severity=warning, routes to hitl_path, creates approval record | [Proactive hitl_path trace](https://smith.langchain.com/public/019cfe43-e5cf-7480-b90e-35a78cea9474/r) |
+| 2 | User asks "What should I focus on?" via on-demand chat (real Ship prod data) | Agent fetches issues + weeks, routes to on_demand_path, returns prioritized task list citing specific issue titles and assignees | [On-demand trace](https://smith.langchain.com/public/019cfe43-eef8-7328-8854-8e6b5e2f6831/r) |
+
+---
+
+## Architecture Decisions
+
+### Framework: LangGraph (TypeScript)
+
+**Chosen over** LangChain (no conditional branching), CrewAI (Python-only, multi-agent overkill), custom (too much reinvention).
+
+**Why LangGraph:** Conditional branching is the core requirement — the graph must produce visibly different execution paths based on what it finds. LangGraph provides `addConditionalEdges` natively, plus parallel node execution via `Promise.all`, built-in state management, and automatic LangSmith tracing with zero config.
+
+**Why TypeScript:** The Ship codebase is TypeScript. Sharing types and conventions reduces context-switching. LangGraph's TS SDK is production-ready.
+
+### LLM: OpenAI GPT-4o-mini
+
+**Chosen for:** Cost efficiency ($0.15/$0.60 per 1M tokens), fast response times, good structured output support.
+
+**Tradeoff:** Less capable than GPT-4o on complex multi-entity reasoning, but sufficient for MVP use cases (summarization, pattern explanation, question answering over structured data).
+
+### State Management: LangGraph Annotation
+
+All state lives in the graph's `Annotation.Root`. No external database for agent state — the graph is stateless between runs, reading fresh data from Ship API each time. Approval records are stored in-memory (suitable for MVP; would move to a database for production).
+
+### Deployment: Railway
+
+Single Express server deployed to Railway with auto-deploy on push. No containerization needed — Railway's Nixpacks auto-detects Node.js. Environment variables managed via Railway dashboard.
+
+---
+
+## Cost Analysis
+
+### Development and Testing Costs
+
+| Item | Amount |
+|------|--------|
+| Claude API - input tokens | N/A (using OpenAI) |
+| Claude API - output tokens | N/A (using OpenAI) |
+| OpenAI API - input tokens | ~50K tokens |
+| OpenAI API - output tokens | ~15K tokens |
+| Total invocations during development | ~30 |
+| Total development spend | ~$0.05 |
+
+### Production Cost Projections
+
+| 100 Users | 1,000 Users | 10,000 Users |
+|-----------|-------------|--------------|
+| $10/month | $95/month | $960/month |
+
+**Assumptions:**
+- Proactive runs per project per day: 20 (every 30 min, business hours)
+- On-demand invocations per user per day: 5
+- Average tokens per invocation: ~1,500 (1K input + 500 output)
+- Cost per run: ~$0.001 (GPT-4o-mini pricing)
+- Estimated runs per day (100 users): ~600 proactive + ~500 on-demand = 1,100
