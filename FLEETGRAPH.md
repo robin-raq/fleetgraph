@@ -154,6 +154,9 @@ This ensures the agent **never acts on its own** for consequential actions. It o
 |---|------------|-----------------|------------|
 | 1 | Multiple issues with no activity for 3+ days (real Ship prod data) | Agent detects 8 stale issues, severity=warning, routes to hitl_path, creates approval record | [Proactive hitl_path trace](https://smith.langchain.com/public/86bf7800-87b5-4638-a7ac-a7c7f3dc0df2/r) |
 | 2 | User asks "What should I focus on?" via on-demand chat (real Ship prod data) | Agent fetches issues + weeks, routes to on_demand_path, returns prioritized task list citing specific issue titles and assignees | [On-demand trace](https://smith.langchain.com/public/4fcd07e7-1b67-4dd5-86c5-a4193ce3e53c/r) |
+| 3 | User asks "What is going well on the project?" (on-demand, no negative framing) | Agent routes to on_demand_path, summarizes positive project aspects using real issue/sprint data, no HITL gate triggered | [On-demand clean summary](https://smith.langchain.com/public/96e4d988-29de-4c98-afb2-b80b85408d94/r) |
+| 4 | Proactive scan against prod with 8 stale issues (different run from #1) | Agent detects same stale pattern, routes to hitl_path, creates new approval record — demonstrates consistent detection across runs | [Proactive repeat detection](https://smith.langchain.com/public/4dd3fb3c-9459-45cf-b15c-5be8c85ec829/r) |
+| 5 | User on issue page `/issues/b9921f8d-...` asks "What is the status of this issue?" with entity context | Agent receives entityType=issue + entityId, routes to on_demand_path, responds with issue-specific status using context injection | [On-demand with entity context](https://smith.langchain.com/public/a93d55fb-3d2b-4ee9-b105-50a21e1e52e9/r) |
 
 ---
 
