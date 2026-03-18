@@ -152,8 +152,8 @@ This ensures the agent **never acts on its own** for consequential actions. It o
 
 | # | Ship State | Expected Output | Trace Link |
 |---|------------|-----------------|------------|
-| 1 | Multiple issues with no activity for 3+ days (real Ship prod data) | Agent detects 8 stale issues, severity=warning, routes to hitl_path, creates approval record | [Proactive hitl_path trace](https://smith.langchain.com/public/019cfe43-e5cf-7480-b90e-35a78cea9474/r) |
-| 2 | User asks "What should I focus on?" via on-demand chat (real Ship prod data) | Agent fetches issues + weeks, routes to on_demand_path, returns prioritized task list citing specific issue titles and assignees | [On-demand trace](https://smith.langchain.com/public/019cfe43-eef8-7328-8854-8e6b5e2f6831/r) |
+| 1 | Multiple issues with no activity for 3+ days (real Ship prod data) | Agent detects 8 stale issues, severity=warning, routes to hitl_path, creates approval record | [Proactive hitl_path trace](https://smith.langchain.com/public/86bf7800-87b5-4638-a7ac-a7c7f3dc0df2/r) |
+| 2 | User asks "What should I focus on?" via on-demand chat (real Ship prod data) | Agent fetches issues + weeks, routes to on_demand_path, returns prioritized task list citing specific issue titles and assignees | [On-demand trace](https://smith.langchain.com/public/4fcd07e7-1b67-4dd5-86c5-a4193ce3e53c/r) |
 
 ---
 
