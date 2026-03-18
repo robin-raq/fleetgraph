@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FleetGraph — Test Harness</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1117; color: #e1e4e8; padding: 24px; }
+    h1 { font-size: 1.4rem; margin-bottom: 4px; color: #58a6ff; }
+    .subtitle { font-size: 0.85rem; color: #8b949e; margin-bottom: 24px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; max-width: 1100px; }
+    .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; }
+    .card h2 { font-size: 1rem; margin-bottom: 12px; color: #c9d1d9; }
+    label { display: block; font-size: 0.8rem; color: #8b949e; margin-bottom: 4px; margin-top: 10px; }
+    input, select, textarea { width: 100%; padding: 8px 10px; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; color: #e1e4e8; font-size: 0.85rem; }
+    textarea { resize: vertical; min-height: 60px; }
+    button { padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-size: 0.85rem; font-weight: 600; margin-top: 12px; }
+    .btn-primary { background: #238636; color: #fff; }
+    .btn-primary:hover { background: #2ea043; }
+    .btn-primary:disabled { background: #1a1e24; color: #484f58; cursor: not-allowed; }
+    .btn-warn { background: #9e6a03; color: #fff; }
+    .btn-warn:hover { background: #bb8009; }
+    .btn-sm { padding: 4px 10px; font-size: 0.75rem; margin: 2px; }
+    .btn-approve { background: #238636; color: #fff; }
+    .btn-reject { background: #da3633; color: #fff; }
+    .output { margin-top: 12px; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 12px; font-size: 0.8rem; max-height: 400px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; }
+    .output.empty { color: #484f58; font-style: italic; }
+    .full-width { grid-column: 1 / -1; }
+    .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #30363d; border-top-color: #58a6ff; border-radius: 50%; animation: spin 0.6s linear infinite; margin-right: 6px; vertical-align: middle; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <h1>⚡ FleetGraph Test Harness</h1>
+  <p class="subtitle">Test proactive detection, on-demand chat, and HITL approvals against real Ship data.</p>
+
+  <div class="grid">
+    <div class="card">
+      <h2>🔄 Proactive Run</h2>
+      <label>Target</label>
+      <select id="proTarget">
+        <option value="prod">Production</option>
+        <option value="local">Local</option>
+      </select>
+      <button class="btn-primary" id="proBtn">Run Proactive Scan</button>
+      <div class="output empty" id="proOutput">Results will appear here...</div>
+    </div>
+
+    <div class="card">
+      <h2>💬 On-Demand Chat</h2>
+      <label>Message</label>
+      <textarea id="chatMsg" placeholder="What should I focus on today?">What should I focus on today?</textarea>
+      <label>Context (optional)</label>
+      <select id="chatContext">
+        <option value="">None</option>
+        <option value="dashboard">Dashboard view</option>
+        <option value="sprint">Sprint view</option>
+        <option value="project">Project view</option>
+      </select>
+      <label>Target</label>
+      <select id="chatTarget">
+        <option value="prod">Production</option>
+        <option value="local">Local</option>
+      </select>
+      <button class="btn-primary" id="chatBtn">Send</button>
+      <div class="output empty" id="chatOutput">Response will appear here...</div>
+    </div>
+
+    <div class="card full-width">
+      <h2>✅ Pending Approvals</h2>
+      <button class="btn-warn" id="refreshBtn">Refresh Approvals</button>
+      <div id="approvalsContainer" class="output empty">Click refresh to load approvals...</div>
+    </div>
+  </div>
+
+  <script>
+    const API = window.location.origin;
+
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.textContent;
+    }
+
+    function clearChildren(el) {
+      while (el.firstChild) el.removeChild(el.firstChild);
+    }
+
+    function createBadge(severity) {
+      const span = document.createElement('span');
+      span.textContent = severity;
+      span.style.cssText = 'display:inline-block;padding:2px 8px;border-radius:10px;font-size:0.7rem;font-weight:600;margin-left:6px;color:#fff;';
+      const colors = { clean: '#238636', warning: '#9e6a03', critical: '#da3633', info: '#1f6feb' };
+      span.style.background = colors[severity] || '#30363d';
+      return span;
+    }
+
+    function renderFinding(f) {
+      const div = document.createElement('div');
+      div.style.cssText = 'border-left:3px solid #9e6a03;padding:8px 10px;margin:6px 0;background:#1c2028;border-radius:0 4px 4px 0;';
+      const title = document.createElement('div');
+      title.style.cssText = 'font-weight:600;font-size:0.8rem;';
+      title.textContent = f.title;
+      const detail = document.createElement('div');
+      detail.style.cssText = 'font-size:0.75rem;color:#8b949e;margin-top:2px;';
+      detail.textContent = f.detail;
+      div.appendChild(title);
+      div.appendChild(detail);
+      return div;
+    }
+
+    function setLoading(btn, text) {
+      btn.disabled = true;
+      btn.textContent = text;
+    }
+
+    function resetBtn(btn, text) {
+      btn.disabled = false;
+      btn.textContent = text;
+    }
+
+    document.getElementById('proBtn').addEventListener('click', async function() {
+      const btn = this;
+      const out = document.getElementById('proOutput');
+      const target = document.getElementById('proTarget').value;
+
+      setLoading(btn, 'Scanning...');
+      clearChildren(out);
+      out.className = 'output empty';
+      out.textContent = 'Running proactive scan...';
+
+      try {
+        const res = await fetch(API + '/api/proactive/run', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ target: target })
+        });
+        const data = await res.json();
+        clearChildren(out);
+        out.className = 'output';
+
+        const header = document.createElement('div');
+        const traceLabel = document.createElement('strong');
+        traceLabel.textContent = 'Trace Path: ';
+        header.appendChild(traceLabel);
+        header.appendChild(document.createTextNode(data.tracePath + ' '));
+        header.appendChild(createBadge(data.severity));
+        out.appendChild(header);
+
+        const approvalLine = document.createElement('div');
+        approvalLine.textContent = 'Needs Approval: ' + data.needsApproval;
+        if (data.approvalId) approvalLine.textContent += ' | ID: ' + data.approvalId;
+        out.appendChild(approvalLine);
+
+        const summaryHeader = document.createElement('strong');
+        summaryHeader.textContent = '\nSummary:';
+        out.appendChild(summaryHeader);
+        const summaryText = document.createElement('div');
+        summaryText.textContent = data.summary;
+        out.appendChild(summaryText);
+
+        const findingsHeader = document.createElement('strong');
+        findingsHeader.textContent = '\nFindings (' + (data.findings ? data.findings.length : 0) + '):';
+        out.appendChild(findingsHeader);
+        if (data.findings) data.findings.forEach(function(f) { out.appendChild(renderFinding(f)); });
+
+        if (data.needsApproval) loadApprovals();
+      } catch (err) {
+        clearChildren(out);
+        out.className = 'output';
+        out.textContent = 'Error: ' + err.message;
+      }
+      resetBtn(btn, 'Run Proactive Scan');
+    });
+
+    document.getElementById('chatBtn').addEventListener('click', async function() {
+      const btn = this;
+      const out = document.getElementById('chatOutput');
+      const message = document.getElementById('chatMsg').value;
+      const target = document.getElementById('chatTarget').value;
+      const ctxVal = document.getElementById('chatContext').value;
+
+      var context = undefined;
+      if (ctxVal) {
+        context = { pathname: '/' + ctxVal, entityType: ctxVal === 'sprint' ? 'sprint' : ctxVal === 'project' ? 'project' : 'unknown' };
+      }
+
+      setLoading(btn, 'Thinking...');
+      clearChildren(out);
+      out.className = 'output empty';
+      out.textContent = 'Waiting for response...';
+
+      try {
+        const res = await fetch(API + '/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ target: target, message: message, context: context })
+        });
+        const data = await res.json();
+        clearChildren(out);
+        out.className = 'output';
+
+        const header = document.createElement('div');
+        const traceLabel = document.createElement('strong');
+        traceLabel.textContent = 'Trace Path: ';
+        header.appendChild(traceLabel);
+        header.appendChild(document.createTextNode(data.tracePath + ' '));
+        header.appendChild(createBadge(data.severity));
+        out.appendChild(header);
+
+        const responseHeader = document.createElement('strong');
+        responseHeader.textContent = '\nResponse:';
+        out.appendChild(responseHeader);
+        const responseText = document.createElement('div');
+        responseText.textContent = data.chatResponse || data.summary;
+        responseText.style.marginTop = '4px';
+        out.appendChild(responseText);
+
+        if (data.findings && data.findings.length > 0) {
+          const findingsHeader = document.createElement('strong');
+          findingsHeader.textContent = '\nFindings (' + data.findings.length + '):';
+          out.appendChild(findingsHeader);
+          data.findings.forEach(function(f) { out.appendChild(renderFinding(f)); });
+        }
+      } catch (err) {
+        clearChildren(out);
+        out.className = 'output';
+        out.textContent = 'Error: ' + err.message;
+      }
+      resetBtn(btn, 'Send');
+    });
+
+    document.getElementById('refreshBtn').addEventListener('click', loadApprovals);
+
+    async function loadApprovals() {
+      const container = document.getElementById('approvalsContainer');
+      try {
+        const res = await fetch(API + '/api/approvals');
+        const data = await res.json();
+        var approvals = data.approvals || [];
+
+        clearChildren(container);
+
+        if (approvals.length === 0) {
+          container.className = 'output empty';
+          container.textContent = 'No approvals found.';
+          return;
+        }
+
+        container.className = 'output';
+        approvals.forEach(function(a) {
+          var item = document.createElement('div');
+          item.style.cssText = 'border:1px solid #30363d;border-radius:6px;padding:10px;margin:6px 0;background:#1c2028;';
+
+          var headerDiv = document.createElement('div');
+          headerDiv.style.cssText = 'display:flex;justify-content:space-between;align-items:center;';
+          var leftSpan = document.createElement('span');
+          leftSpan.textContent = (a.findings ? a.findings.length : 0) + ' finding(s) — ' + a.target;
+          leftSpan.style.fontWeight = '600';
+          var statusSpan = document.createElement('span');
+          statusSpan.textContent = a.status;
+          statusSpan.style.cssText = 'font-size:0.7rem;text-transform:uppercase;font-weight:700;';
+          var statusColors = { pending: '#d29922', approved: '#3fb950', rejected: '#f85149' };
+          statusSpan.style.color = statusColors[a.status] || '#8b949e';
+          headerDiv.appendChild(leftSpan);
+          headerDiv.appendChild(statusSpan);
+          item.appendChild(headerDiv);
+
+          var dateLine = document.createElement('div');
+          dateLine.style.cssText = 'font-size:0.75rem;color:#8b949e;margin-top:4px;';
+          dateLine.textContent = 'Created: ' + new Date(a.createdAt).toLocaleString();
+          item.appendChild(dateLine);
+
+          if (a.status === 'pending') {
+            var btnRow = document.createElement('div');
+            btnRow.style.marginTop = '8px';
+            var approveBtn = document.createElement('button');
+            approveBtn.textContent = '✓ Approve';
+            approveBtn.className = 'btn-sm btn-approve';
+            approveBtn.addEventListener('click', function() { decide(a.id, 'approved'); });
+            var rejectBtn = document.createElement('button');
+            rejectBtn.textContent = '✗ Reject';
+            rejectBtn.className = 'btn-sm btn-reject';
+            rejectBtn.addEventListener('click', function() { decide(a.id, 'rejected'); });
+            btnRow.appendChild(approveBtn);
+            btnRow.appendChild(rejectBtn);
+            item.appendChild(btnRow);
+          }
+
+          if (a.findings) a.findings.forEach(function(f) { item.appendChild(renderFinding(f)); });
+          container.appendChild(item);
+        });
+      } catch (err) {
+        clearChildren(container);
+        container.className = 'output';
+        container.textContent = 'Error: ' + err.message;
+      }
+    }
+
+    async function decide(id, decision) {
+      try {
+        await fetch(API + '/api/approvals/' + id, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ decision: decision })
+        });
+        loadApprovals();
+      } catch (err) {
+        alert('Error: ' + err.message);
+      }
+    }
+  </script>
+</body>
+</html>

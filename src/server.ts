@@ -1,3 +1,4 @@
+import path from "node:path";
 import express from "express";
 import cors from "cors";
 import cron from "node-cron";
@@ -10,6 +11,9 @@ import type { FleetMode, ShipTarget } from "./types";
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
+
+// Serve static test harness (before auth middleware so /test is public)
+app.use(express.static(path.resolve(__dirname, "../public")));
 
 app.use((req, res, next) => {
   if (!config.fleetgraphApiKey) return next();
@@ -33,6 +37,10 @@ const requestSchema = z.object({
 
 app.get("/health", (_req, res) => {
   res.json({ status: "ok", service: "fleetgraph" });
+});
+
+app.get("/", (_req, res) => {
+  res.redirect("/test.html");
 });
 
 app.post("/api/chat", async (req, res) => {
