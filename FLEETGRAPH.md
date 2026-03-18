@@ -6,7 +6,7 @@ FleetGraph is a project intelligence agent for Ship that monitors project execut
 
 **Proactive mode (agent pushes):**
 - Monitors project state on a schedule (polling every 30 minutes during business hours)
-- Detects stale issues (no activity for 3+ days), sprint health risks (too many open issues near sprint end), and unassigned high-priority work
+- Runs 4 detectors: stale issues (no activity 3+ days), sprint health risks (too many open issues near sprint end), unassigned high-priority work, and missed standups
 - Surfaces findings to the team with specific entity references (issue IDs, sprint names, assignee names)
 - All findings pass through a human-in-the-loop approval gate before any downstream notification
 
@@ -39,8 +39,8 @@ FleetGraph is a project intelligence agent for Ship that monitors project execut
 
 ```mermaid
 graph TD
-    START(("__start__")) --> fetch["fetch\n(Ship API: issues + weeks\nin parallel)"]
-    fetch --> analyze["analyze\n(stale issues + sprint health\nrule-based detection)"]
+    START(("__start__")) --> fetch["fetch\n(Ship API: issues + weeks +\nteam + standups in parallel)"]
+    fetch --> analyze["analyze\n(4 detectors: stale issues,\nsprint health, unassigned HP,\nmissed standups)"]
     analyze -->|"mode=proactive\nfindings > 0"| hitlPath["hitlPath\n(LLM summary + create\napproval record)"]
     analyze -->|"mode=proactive\nfindings = 0"| cleanPath["cleanPath\n(LLM summary:\nall clear)"]
     analyze -->|"mode=on_demand"| respondToUser["respondToUser\n(LLM answers user question\nwith project data context)"]
@@ -53,8 +53,8 @@ graph TD
 
 | Node | Type | Description |
 |------|------|-------------|
-| `fetch` | **Fetch** | Pulls issues and weeks from Ship REST API in parallel via `Promise.all` |
-| `analyze` | **Reasoning (rule-based)** | Applies stale-issue and sprint-health detection rules. Computes severity. |
+| `fetch` | **Fetch** | Pulls issues, weeks, team members, and standups from Ship REST API in parallel via `Promise.all`. Standups fetched for active sprint only. |
+| `analyze` | **Reasoning (rule-based)** | Runs 4 detectors: stale issues, sprint health, unassigned high-priority, missed standups. Computes aggregate severity. |
 | `cleanPath` | **Action** | LLM summarizes the clean state. No approval needed. |
 | `hitlPath` | **Action + HITL gate** | LLM summarizes findings. Creates an approval record that must be approved/rejected before any downstream notification. |
 | `respondToUser` | **Reasoning (LLM)** | LLM answers the user's question using fetched Ship data as context. |
@@ -74,7 +74,9 @@ graph TD
   input: FleetRequestInput,   // mode, target, message?, context?
   issues: ShipIssue[],        // fetched from Ship API
   weeks: ShipWeek[],          // fetched from Ship API
-  findings: Finding[],        // detected problems
+  standups: ShipStandup[],    // fetched for active sprint
+  teamMembers: ShipTeamMember[], // fetched from Ship API
+  findings: Finding[],        // detected problems (4 categories)
   severity: Severity,         // "critical" | "warning" | "info" | "clean"
   summary: string,            // LLM-generated summary
   tracePath: string,          // "clean_path" | "hitl_path" | "on_demand_path"
@@ -94,7 +96,8 @@ graph TD
 | 2 | PM | Proactive (cron every 30 min) | Sprint health risk — too many open issues with < 3 days remaining in active sprint | Whether to cut scope, extend sprint, or reassign work |
 | 3 | Engineer | On-demand (chat from dashboard) | "What should I focus on today?" — prioritized list of assigned issues by urgency and staleness | Which task to start working on |
 | 4 | Director | On-demand (chat from project view) | Project health summary — open issue count, sprint progress, detected risks | Whether to escalate to leadership or intervene |
-| 5 | PM | Proactive (cron every 30 min) | Unassigned high-priority issues — issues marked high/critical priority with no assignee | Whether to assign or defer |
+| 5 | PM | Proactive (cron every 30 min) | Unassigned high-priority issues — issues marked high/urgent/critical priority with no assignee, severity=critical | Whether to assign or defer |
+| 6 | PM | Proactive (cron every 30 min) | Missed standups — team members who haven't submitted a standup for the active sprint, severity=info | Whether to nudge team members or ignore |
 
 ---
 
