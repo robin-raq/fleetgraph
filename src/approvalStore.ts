@@ -16,9 +16,10 @@ export interface ApprovalRecord {
 const approvals = new Map<string, ApprovalRecord>();
 
 export function createApproval(target: ShipTarget, findings: Finding[]): ApprovalRecord {
-  if (approvals.size >= config.maxApprovalRecords) {
+  while (approvals.size >= config.maxApprovalRecords) {
     const oldestId = approvals.keys().next().value;
     if (oldestId) approvals.delete(oldestId);
+    else break;
   }
 
   const now = new Date().toISOString();

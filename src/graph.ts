@@ -4,7 +4,7 @@ import { LangChainTracer } from "@langchain/core/tracers/tracer_langchain";
 import { config } from "./config";
 import { createApproval } from "./approvalStore";
 import { ShipClient } from "./shipClient";
-import { staleIssueFindings, sprintHealthFindings, unassignedHighPriorityFindings, missedStandupFindings, computeSeverity } from "./detectors";
+import { isActiveWeek, staleIssueFindings, sprintHealthFindings, unassignedHighPriorityFindings, missedStandupFindings, computeSeverity } from "./detectors";
 import type { ShipTeamMember } from "./shipClient";
 import type { Finding, FleetRequestInput, FleetResult, Severity, ShipIssue, ShipStandup, ShipWeek } from "./types";
 
@@ -76,20 +76,25 @@ function formatDataContext(issues: ShipIssue[], weeks: ShipWeek[], findings: Fin
 const graph = new StateGraph(FleetState)
   .addNode("fetch", async (state) => {
     const client = new ShipClient(state.input.target);
-    const [issues, weeks, teamMembers] = await Promise.all([
-      client.fetchIssues(),
-      client.fetchWeeks(),
-      client.fetchTeamMembers()
-    ]);
 
-    // Fetch standups for the active week (if one exists)
-    const activeWeek = weeks.find((w) => (w.status ?? "").toLowerCase().includes("active"));
-    const standups = activeWeek ? await client.fetchStandups(activeWeek.id) : [];
+    // Fan out: weeks resolves first so standups can start while issues/team are still in flight
+    const weeksPromise = client.fetchWeeks();
+    const standupsPromise = weeksPromise.then((weeks) => {
+      const activeWeek = weeks.find(isActiveWeek);
+      return activeWeek ? client.fetchStandups(activeWeek.id) : [];
+    });
+
+    const [issues, weeks, teamMembers, standups] = await Promise.all([
+      client.fetchIssues(),
+      weeksPromise,
+      client.fetchTeamMembers(),
+      standupsPromise
+    ]);
 
     return { issues, weeks, standups, teamMembers };
   })
   .addNode("analyze", (state) => {
-    const activeWeek = state.weeks.find((w) => (w.status ?? "").toLowerCase().includes("active"));
+    const activeWeek = state.weeks.find(isActiveWeek);
 
     const findings = [
       ...staleIssueFindings(state.issues),

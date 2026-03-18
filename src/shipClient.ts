@@ -1,10 +1,10 @@
 import type { ShipIssue, ShipStandup, ShipTarget, ShipWeek } from "./types";
+import { config, resolveShipTarget } from "./config";
 
 export interface ShipTeamMember {
   id: string;
   name: string;
 }
-import { config, resolveShipTarget } from "./config";
 
 function pickString(record: Record<string, unknown>, keys: string[]): string | undefined {
   for (const key of keys) {
@@ -22,6 +22,18 @@ function toRows(payload: unknown, preferredKey: string): unknown[] {
   if (Array.isArray(preferred)) return preferred;
   const data = record.data;
   return Array.isArray(data) ? data : [];
+}
+
+function mapRows<T>(
+  payload: unknown,
+  preferredKey: string,
+  mapper: (row: Record<string, unknown>) => T,
+  filter: (item: T) => boolean = () => true
+): T[] {
+  return toRows(payload, preferredKey)
+    .filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null)
+    .map(mapper)
+    .filter(filter);
 }
 
 export class ShipClient {
@@ -67,77 +79,53 @@ export class ShipClient {
 
   async fetchIssues(): Promise<ShipIssue[]> {
     const payload = await this.get<unknown>("/api/issues");
-    const rows = toRows(payload, "issues");
-
-    if (!Array.isArray(rows)) return [];
-
-    return rows
-      .filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null)
-      .map((row) => ({
-        id: pickString(row, ["id"]) ?? "",
-        title: pickString(row, ["title", "name"]) ?? "Untitled issue",
-        state: pickString(row, ["state", "status"]),
-        priority: pickString(row, ["priority"]) ?? null,
-        assignee_id: pickString(row, ["assignee_id", "assigneeId"]) ?? null,
-        assignee_name: pickString(row, ["assignee_name", "assigneeName"]) ?? null,
-        updated_at: pickString(row, ["updated_at", "updatedAt", "last_activity_at", "lastActivityAt"]),
-        created_at: pickString(row, ["created_at", "createdAt"])
-      }))
-      .filter((issue) => issue.id);
+    return mapRows<ShipIssue>(payload, "issues", (row) => ({
+      id: pickString(row, ["id"]) ?? "",
+      title: pickString(row, ["title", "name"]) ?? "Untitled issue",
+      state: pickString(row, ["state", "status"]),
+      priority: pickString(row, ["priority"]) ?? null,
+      assignee_id: pickString(row, ["assignee_id", "assigneeId"]) ?? null,
+      assignee_name: pickString(row, ["assignee_name", "assigneeName"]) ?? null,
+      updated_at: pickString(row, ["updated_at", "updatedAt", "last_activity_at", "lastActivityAt"]),
+      created_at: pickString(row, ["created_at", "createdAt"])
+    }), (issue) => !!issue.id);
   }
 
   async fetchWeeks(): Promise<ShipWeek[]> {
     const payload = await this.get<unknown>("/api/weeks");
-    const rows = toRows(payload, "weeks");
-
-    if (!Array.isArray(rows)) return [];
-
-    return rows
-      .filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null)
-      .map((row) => ({
-        id: pickString(row, ["id"]) ?? "",
-        title: pickString(row, ["title", "name"]),
-        start_date: pickString(row, ["start_date", "startDate"]),
-        end_date: pickString(row, ["end_date", "endDate"]),
-        status: pickString(row, ["status", "state"])
-      }))
-      .filter((week) => week.id);
+    return mapRows<ShipWeek>(payload, "weeks", (row) => ({
+      id: pickString(row, ["id"]) ?? "",
+      title: pickString(row, ["title", "name"]),
+      start_date: pickString(row, ["start_date", "startDate"]),
+      end_date: pickString(row, ["end_date", "endDate"]),
+      status: pickString(row, ["status", "state"])
+    }), (week) => !!week.id);
   }
 
   async fetchStandups(weekId: string): Promise<ShipStandup[]> {
     try {
       const payload = await this.get<unknown>(`/api/weeks/${weekId}/standups`);
-      const rows = toRows(payload, "standups");
-
-      return rows
-        .filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null)
-        .map((row) => ({
-          id: pickString(row, ["id"]) ?? "",
-          user_id: pickString(row, ["user_id", "userId"]) ?? "",
-          user_name: pickString(row, ["user_name", "userName", "name"]),
-          week_id: weekId,
-          created_at: pickString(row, ["created_at", "createdAt"])
-        }))
-        .filter((s) => s.id && s.user_id);
+      return mapRows<ShipStandup>(payload, "standups", (row) => ({
+        id: pickString(row, ["id"]) ?? "",
+        user_id: pickString(row, ["user_id", "userId"]) ?? "",
+        user_name: pickString(row, ["user_name", "userName", "name"]),
+        week_id: weekId,
+        created_at: pickString(row, ["created_at", "createdAt"])
+      }), (s) => !!(s.id && s.user_id));
     } catch {
-      return []; // graceful degradation if endpoint doesn't exist
+      return [];
     }
   }
 
   async fetchTeamMembers(): Promise<ShipTeamMember[]> {
     try {
       const payload = await this.get<unknown>("/api/team/people");
-      const rows = toRows(payload, "people");
-
-      return rows
-        .filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null)
-        .map((row) => ({
-          id: pickString(row, ["id"]) ?? "",
-          name: pickString(row, ["name", "display_name", "displayName"]) ?? "Unknown"
-        }))
-        .filter((m) => m.id);
+      return mapRows<ShipTeamMember>(payload, "people", (row) => ({
+        id: pickString(row, ["id"]) ?? "",
+        name: pickString(row, ["name", "display_name", "displayName"]) ?? "Unknown"
+      }), (m) => !!m.id);
     } catch {
-      return []; // graceful degradation if endpoint doesn't exist
+      return [];
     }
   }
 }

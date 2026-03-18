@@ -3,6 +3,10 @@ import type { Finding, Severity, ShipIssue, ShipStandup, ShipWeek } from "./type
 const DONE_STATES = ["done", "cancelled"];
 const HIGH_PRIORITIES = ["high", "urgent", "critical"];
 
+export function isActiveWeek(week: ShipWeek): boolean {
+  return (week.status ?? "").toLowerCase().includes("active");
+}
+
 export function toDate(dateLike?: string): Date | null {
   if (!dateLike) return null;
   const d = new Date(dateLike);
@@ -13,7 +17,7 @@ export function staleIssueFindings(issues: ShipIssue[], nowMs: number = Date.now
   const staleMs = 1000 * 60 * 60 * 24 * 3;
 
   return issues
-    .filter((issue) => (issue.state ?? "").toLowerCase() !== "done")
+    .filter((issue) => !DONE_STATES.includes((issue.state ?? "").toLowerCase()))
     .filter((issue) => {
       const updated = toDate(issue.updated_at)?.getTime() ?? toDate(issue.created_at)?.getTime();
       if (!updated) return true;
@@ -31,10 +35,10 @@ export function staleIssueFindings(issues: ShipIssue[], nowMs: number = Date.now
 }
 
 export function sprintHealthFindings(weeks: ShipWeek[], issues: ShipIssue[], nowMs: number = Date.now()): Finding[] {
-  const activeWeek = weeks.find((week) => (week.status ?? "").toLowerCase().includes("active"));
+  const activeWeek = weeks.find(isActiveWeek);
   if (!activeWeek) return [];
 
-  const openIssues = issues.filter((issue) => !["done", "cancelled"].includes((issue.state ?? "").toLowerCase())).length;
+  const openIssues = issues.filter((issue) => !DONE_STATES.includes((issue.state ?? "").toLowerCase())).length;
   const endDate = toDate(activeWeek.end_date);
   if (!endDate) return [];
 

@@ -127,19 +127,22 @@ if (config.proactiveCronEnabled) {
   cron.schedule(config.proactiveCron, async () => {
     if (proactiveRunInProgress) return;
     proactiveRunInProgress = true;
+    const targets = ["local", "prod"] as const;
     try {
-      for (const target of ["local", "prod"] as const) {
-        try {
-          const result = await runFleetGraph({ mode: "proactive", target });
-          console.log(`[proactive:${target}]`, {
-            severity: result.severity,
-            findings: result.findings.length,
-            tracePath: result.tracePath
+      const results = await Promise.allSettled(
+        targets.map((target) => runFleetGraph({ mode: "proactive", target }))
+      );
+      results.forEach((outcome, i) => {
+        if (outcome.status === "fulfilled") {
+          console.log(`[proactive:${targets[i]}]`, {
+            severity: outcome.value.severity,
+            findings: outcome.value.findings.length,
+            tracePath: outcome.value.tracePath
           });
-        } catch (error) {
-          console.error(`[proactive:${target}] failed`, error);
+        } else {
+          console.error(`[proactive:${targets[i]}] failed`, outcome.reason);
         }
-      }
+      });
     } finally {
       proactiveRunInProgress = false;
     }
