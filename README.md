@@ -62,7 +62,7 @@ Open http://localhost:8787 for the test harness.
 | `CORS_ORIGINS` | No | `*` or comma-separated frontend origin allowlist |
 | `SHIP_API_TIMEOUT_MS` | No | Request timeout for Ship API calls (default: `8000`) |
 | `ENABLE_PROACTIVE_CRON` | No | Set `true` to enable scheduled polling |
-| `PROACTIVE_CRON` | No | Cron expression (default: `0,30 8-18 * * 1-5`) |
+| `PROACTIVE_CRON` | No | Cron expression (default: `*/5 8-18 * * 1-5`) |
 | `MAX_APPROVAL_RECORDS` | No | Cap for in-memory approval queue (default: `500`) |
 
 ## API Endpoints

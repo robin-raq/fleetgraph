@@ -105,33 +105,52 @@ graph TD
 
 **Decision: Polling (cron-based)**
 
-FleetGraph uses a polling trigger model — a cron job runs the proactive graph every 30 minutes during business hours (Mon-Fri, 8am-6pm).
+FleetGraph uses a polling trigger model — a cron job runs the proactive graph every **5 minutes** during business hours (Mon-Fri, 8am-6pm).
 
 ### Why polling?
 
 | Approach | Pros | Cons |
 |----------|------|------|
-| **Polling (chosen)** | Simple to implement; works with any API; no Ship code changes needed; predictable cost | Higher latency (up to 30 min); redundant calls when nothing changed |
-| Webhook | Real-time detection; no wasted calls | Ship has no webhook system; would require Ship codebase changes; harder to deploy |
+| **Polling (chosen)** | Simple to implement; works with any API; no Ship code changes needed; predictable cost; meets 5-min SLA | Redundant calls when nothing changed; higher cost than webhooks at scale |
+| Webhook | Real-time detection; no wasted calls; lowest latency | Ship has no webhook system; would require Ship codebase changes; harder to deploy |
 | Hybrid | Best of both worlds | Highest complexity; still needs Ship webhook support |
 
-**Ship does not expose webhooks**, so polling is the only viable option without modifying the Ship codebase. A 30-minute poll interval keeps detection latency well under the PRD's 5-minute goal (worst case: an event happens right after a poll, detected 30 min later — still far faster than manual review cycles).
+**Ship does not expose webhooks**, so polling is the only viable option without modifying the Ship codebase. A 5-minute poll interval meets the PRD's < 5-minute detection latency requirement:
+- **Worst case:** event happens right after a poll → detected 5 minutes later ✅
+- **Average case:** 2.5 minutes
+- **Best case:** event happens right before a poll → detected immediately
+
+### Detection latency analysis
+
+| Metric | Value |
+|--------|-------|
+| Poll interval | 5 minutes |
+| Worst-case detection latency | 5 minutes |
+| Average detection latency | 2.5 minutes |
+| Graph execution time (measured) | ~2-4 seconds |
+| Ship API response time (measured) | ~50-200ms per call |
+| Total worst-case surface time | ~5 min 4 sec |
 
 ### Cost at scale
 
 | Scale | Proactive runs/day | On-demand runs/day | Total runs/day | Est. LLM cost/day |
 |-------|--------------------|--------------------|----------------|--------------------|
-| 1 workspace (MVP) | ~20 | ~50 | ~70 | ~$0.05 |
-| 100 projects | ~4,800 | ~500 | ~5,300 | ~$3.20 |
-| 1,000 projects | ~48,000 | ~5,000 | ~53,000 | ~$32.00 |
+| 1 workspace (MVP) | ~120 | ~50 | ~170 | ~$0.10 |
+| 100 projects | ~28,800 | ~500 | ~29,300 | ~$17.60 |
+| 1,000 projects | ~288,000 | ~5,000 | ~293,000 | ~$176.00 |
 
-Assumptions: 20 polls/day per project (business hours), ~1K tokens per run at GPT-4o-mini pricing ($0.15/$0.60 per 1M tokens).
+Assumptions: 120 polls/day per project (every 5 min × 10 hours business hours), ~1K tokens per run at GPT-4o-mini pricing ($0.15/$0.60 per 1M tokens). Cost per run: ~$0.0006.
+
+**Cost cliff:** At 1,000 projects, LLM cost reaches ~$176/day (~$5,280/month). Mitigation strategies:
+- Skip poll if no Ship data changed since last run (diff-based polling)
+- Increase interval to 15 min for low-priority projects
+- Use cheaper model for triage, full model only when findings detected
 
 ### Configuration
 
 ```
 ENABLE_PROACTIVE_CRON=true
-PROACTIVE_CRON=0,30 8-18 * * 1-5
+PROACTIVE_CRON=*/5 8-18 * * 1-5
 ```
 
 ---
@@ -206,11 +225,11 @@ Single Express server deployed to Railway with auto-deploy on push. No container
 
 | 100 Users | 1,000 Users | 10,000 Users |
 |-----------|-------------|--------------|
-| $10/month | $95/month | $960/month |
+| $55/month | $540/month | $5,400/month |
 
 **Assumptions:**
-- Proactive runs per project per day: 20 (every 30 min, business hours)
+- Proactive runs per project per day: 120 (every 5 min, 10 hours business day)
 - On-demand invocations per user per day: 5
 - Average tokens per invocation: ~1,500 (1K input + 500 output)
-- Cost per run: ~$0.001 (GPT-4o-mini pricing)
-- Estimated runs per day (100 users): ~600 proactive + ~500 on-demand = 1,100
+- Cost per run: ~$0.0006 (GPT-4o-mini pricing)
+- Estimated runs per day (100 users): ~3,600 proactive + ~500 on-demand = 4,100

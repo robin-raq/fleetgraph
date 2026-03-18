@@ -16,7 +16,7 @@ const envSchema = z.object({
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_MODEL: z.string().default("gpt-4o-mini"),
   ENABLE_PROACTIVE_CRON: z.string().default("false"),
-  PROACTIVE_CRON: z.string().default("0,30 8-18 * * 1-5"),
+  PROACTIVE_CRON: z.string().default("*/5 8-18 * * 1-5"),
   MAX_APPROVAL_RECORDS: z.coerce.number().int().min(50).max(10000).default(500)
 });
 
