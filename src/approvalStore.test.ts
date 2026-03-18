@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { createApproval, listApprovals, updateApproval } from "./approvalStore";
 import type { Finding } from "./types";
+import { config } from "./config";
 
 const mockFinding: Finding = {
   id: "stale-1",
@@ -47,5 +48,18 @@ describe("approvalStore", () => {
   it("returns null for nonexistent approval", () => {
     const result = updateApproval("nonexistent-id", "approved");
     expect(result).toBeNull();
+  });
+
+  it("caps the approval queue to the configured max size", () => {
+    const startSize = listApprovals().length;
+    const createCount = config.maxApprovalRecords + 5;
+
+    for (let i = 0; i < createCount; i += 1) {
+      createApproval("prod", [{ ...mockFinding, id: `stale-${i}` }]);
+    }
+
+    const all = listApprovals();
+    expect(all.length).toBeLessThanOrEqual(config.maxApprovalRecords);
+    expect(all.length).toBeGreaterThanOrEqual(Math.min(startSize, config.maxApprovalRecords));
   });
 });

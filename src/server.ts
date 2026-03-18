@@ -1,4 +1,5 @@
 import path from "node:path";
+import { timingSafeEqual } from "node:crypto";
 import express from "express";
 import cors from "cors";
 import cron from "node-cron";
@@ -6,19 +7,37 @@ import { z } from "zod";
 import { config } from "./config";
 import { runFleetGraph } from "./graph";
 import { listApprovals, updateApproval } from "./approvalStore";
-import type { FleetMode, ShipTarget } from "./types";
+import type { FleetMode } from "./types";
 
 const app = express();
-app.use(cors());
+
+const corsOptions: cors.CorsOptions = config.corsOrigins === "*"
+  ? { origin: true }
+  : {
+      origin: (origin, callback) => {
+        if (!origin || config.corsOrigins.includes(origin)) return callback(null, true);
+        return callback(new Error("Not allowed by CORS"));
+      }
+    };
+
+app.use(cors(corsOptions));
 app.use(express.json({ limit: "1mb" }));
 
 // Serve static test harness (before auth middleware so /test is public)
 app.use(express.static(path.resolve(__dirname, "../public")));
 
+function apiKeyMatches(provided: string | undefined, expected: string): boolean {
+  if (!provided) return false;
+  const expectedBytes = Buffer.from(expected);
+  const providedBytes = Buffer.from(provided);
+  if (expectedBytes.length !== providedBytes.length) return false;
+  return timingSafeEqual(expectedBytes, providedBytes);
+}
+
 app.use((req, res, next) => {
   if (!config.fleetgraphApiKey) return next();
   const provided = req.header("x-fleetgraph-key");
-  if (provided !== config.fleetgraphApiKey) {
+  if (!apiKeyMatches(provided, config.fleetgraphApiKey)) {
     return res.status(401).json({ error: "Invalid FleetGraph API key" });
   }
   next();
@@ -34,6 +53,23 @@ const requestSchema = z.object({
     entityId: z.string().optional()
   }).optional()
 });
+
+const proactiveRequestSchema = z.object({
+  target: z.enum(["local", "prod"]).default("prod")
+});
+
+const approvalListQuerySchema = z.object({
+  status: z.enum(["pending", "approved", "rejected"]).optional()
+});
+
+const approvalDecisionSchema = z.object({
+  decision: z.enum(["approved", "rejected"])
+});
+
+function publicErrorMessage(error: unknown): string {
+  if (process.env.NODE_ENV === "production") return "Internal server error";
+  return error instanceof Error ? error.message : "Unknown server error";
+}
 
 app.get("/health", (_req, res) => {
   res.json({ status: "ok", service: "fleetgraph" });
@@ -54,55 +90,58 @@ app.post("/api/chat", async (req, res) => {
     const result = await runFleetGraph(parsed.data);
     return res.json(result);
   } catch (error) {
-    return res.status(500).json({ error: (error as Error).message });
+    return res.status(500).json({ error: publicErrorMessage(error) });
   }
 });
 
 app.post("/api/proactive/run", async (req, res) => {
-  const target = (req.body?.target ?? "prod") as ShipTarget;
-  if (target !== "local" && target !== "prod") return res.status(400).json({ error: "Invalid target" });
+  const parsed = proactiveRequestSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
   try {
-    const result = await runFleetGraph({ mode: "proactive", target });
+    const result = await runFleetGraph({ mode: "proactive", target: parsed.data.target });
     return res.json(result);
   } catch (error) {
-    return res.status(500).json({ error: (error as Error).message });
+    return res.status(500).json({ error: publicErrorMessage(error) });
   }
 });
 
 app.get("/api/approvals", (req, res) => {
-  const status = req.query.status;
-  if (status && status !== "pending" && status !== "approved" && status !== "rejected") {
-    return res.status(400).json({ error: "Invalid status" });
-  }
-  res.json({ approvals: listApprovals(status as "pending" | "approved" | "rejected" | undefined) });
+  const parsed = approvalListQuerySchema.safeParse({ status: req.query.status });
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
+  res.json({ approvals: listApprovals(parsed.data.status) });
 });
 
 app.post("/api/approvals/:id", (req, res) => {
   const id = req.params.id;
-  const decision = req.body?.decision;
-  if (decision !== "approved" && decision !== "rejected") {
-    return res.status(400).json({ error: "decision must be approved|rejected" });
-  }
+  const parsed = approvalDecisionSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
-  const record = updateApproval(id, decision);
+  const record = updateApproval(id, parsed.data.decision);
   if (!record) return res.status(404).json({ error: "Approval not found" });
   return res.json(record);
 });
 
+let proactiveRunInProgress = false;
 if (config.proactiveCronEnabled) {
   cron.schedule(config.proactiveCron, async () => {
-    for (const target of ["local", "prod"] as const) {
-      try {
-        const result = await runFleetGraph({ mode: "proactive", target });
-        console.log(`[proactive:${target}]`, {
-          severity: result.severity,
-          findings: result.findings.length,
-          tracePath: result.tracePath
-        });
-      } catch (error) {
-        console.error(`[proactive:${target}] failed`, error);
+    if (proactiveRunInProgress) return;
+    proactiveRunInProgress = true;
+    try {
+      for (const target of ["local", "prod"] as const) {
+        try {
+          const result = await runFleetGraph({ mode: "proactive", target });
+          console.log(`[proactive:${target}]`, {
+            severity: result.severity,
+            findings: result.findings.length,
+            tracePath: result.tracePath
+          });
+        } catch (error) {
+          console.error(`[proactive:${target}] failed`, error);
+        }
       }
+    } finally {
+      proactiveRunInProgress = false;
     }
   });
 }

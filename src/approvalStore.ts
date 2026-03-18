@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Finding, ShipTarget } from "./types";
+import { config } from "./config";
 
 export type ApprovalStatus = "pending" | "approved" | "rejected";
 
@@ -15,6 +16,11 @@ export interface ApprovalRecord {
 const approvals = new Map<string, ApprovalRecord>();
 
 export function createApproval(target: ShipTarget, findings: Finding[]): ApprovalRecord {
+  if (approvals.size >= config.maxApprovalRecords) {
+    const oldestId = approvals.keys().next().value;
+    if (oldestId) approvals.delete(oldestId);
+  }
+
   const now = new Date().toISOString();
   const record: ApprovalRecord = {
     id: randomUUID(),
