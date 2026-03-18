@@ -1,8 +1,10 @@
 import { Annotation, StateGraph } from "@langchain/langgraph";
 import { ChatOpenAI } from "@langchain/openai";
+import { LangChainTracer } from "@langchain/core/tracers/tracer_langchain";
 import { config } from "./config";
 import { createApproval } from "./approvalStore";
 import { ShipClient } from "./shipClient";
+import { staleIssueFindings, sprintHealthFindings, computeSeverity } from "./detectors";
 import type { Finding, FleetRequestInput, FleetResult, Severity, ShipIssue, ShipWeek } from "./types";
 
 const FleetState = Annotation.Root({
@@ -12,78 +14,24 @@ const FleetState = Annotation.Root({
   findings: Annotation<Finding[]>(),
   severity: Annotation<Severity>(),
   summary: Annotation<string>(),
-  tracePath: Annotation<"clean_path" | "hitl_path">(),
+  tracePath: Annotation<"clean_path" | "hitl_path" | "on_demand_path">(),
   needsApproval: Annotation<boolean>(),
-  approvalId: Annotation<string | undefined>()
+  approvalId: Annotation<string | undefined>(),
+  chatResponse: Annotation<string | undefined>()
 });
 
-function toDate(dateLike?: string): Date | null {
-  if (!dateLike) return null;
-  const d = new Date(dateLike);
-  return Number.isNaN(d.getTime()) ? null : d;
-}
-
-function staleIssueFindings(issues: ShipIssue[]): Finding[] {
-  const now = Date.now();
-  const staleMs = 1000 * 60 * 60 * 24 * 3;
-
-  return issues
-    .filter((issue) => (issue.state ?? "").toLowerCase() !== "done")
-    .filter((issue) => {
-      const updated = toDate(issue.updated_at)?.getTime() ?? toDate(issue.created_at)?.getTime();
-      if (!updated) return true;
-      return now - updated >= staleMs;
-    })
-    .slice(0, 8)
-    .map((issue) => ({
-      id: `stale-${issue.id}`,
-      category: "stale_issue",
-      severity: "warning",
-      title: `Stale issue: ${issue.title}`,
-      detail: `Issue ${issue.id} appears inactive for 3+ days and is still not done.`,
-      entityIds: [issue.id]
-    }));
-}
-
-function sprintHealthFindings(weeks: ShipWeek[], issues: ShipIssue[]): Finding[] {
-  const activeWeek = weeks.find((week) => (week.status ?? "").toLowerCase().includes("active"));
-  if (!activeWeek) return [];
-
-  const openIssues = issues.filter((issue) => !["done", "cancelled"].includes((issue.state ?? "").toLowerCase())).length;
-  const endDate = toDate(activeWeek.end_date);
-  if (!endDate) return [];
-
-  const daysRemaining = Math.ceil((endDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
-  if (daysRemaining > 3 || openIssues < 8) return [];
-
-  return [
-    {
-      id: `sprint-health-${activeWeek.id}`,
-      category: "sprint_health",
-      severity: "warning",
-      title: `Sprint health risk: ${activeWeek.title ?? activeWeek.id}`,
-      detail: `${openIssues} issues are still open with ${Math.max(daysRemaining, 0)} day(s) left in the active sprint.`,
-      entityIds: [activeWeek.id]
-    }
-  ];
-}
-
-function computeSeverity(findings: Finding[]): Severity {
-  if (findings.some((f) => f.severity === "critical")) return "critical";
-  if (findings.some((f) => f.severity === "warning")) return "warning";
-  if (findings.some((f) => f.severity === "info")) return "info";
-  return "clean";
+function createModel(): ChatOpenAI {
+  return new ChatOpenAI({
+    apiKey: config.openAiApiKey,
+    model: config.openAiModel,
+    temperature: 0.1
+  });
 }
 
 async function summarize(findings: Finding[], fallback: string): Promise<string> {
   if (!config.openAiApiKey || findings.length === 0) return fallback;
 
-  const model = new ChatOpenAI({
-    apiKey: config.openAiApiKey,
-    model: config.openAiModel,
-    temperature: 0.1
-  });
-
+  const model = createModel();
   const findingList = findings.map((f) => `- ${f.title}: ${f.detail}`).join("\n");
   const response = await model.invoke([
     {
@@ -98,6 +46,22 @@ async function summarize(findings: Finding[], fallback: string): Promise<string>
 
   const text = typeof response.content === "string" ? response.content : fallback;
   return text || fallback;
+}
+
+function formatDataContext(issues: ShipIssue[], weeks: ShipWeek[], findings: Finding[]): string {
+  const issuesSummary = issues.slice(0, 15).map((i) =>
+    `- [${i.state ?? "unknown"}] "${i.title}" (${i.assignee_name ?? "unassigned"}, updated ${i.updated_at ?? "never"})`
+  ).join("\n");
+
+  const weeksSummary = weeks.map((w) =>
+    `- "${w.title ?? w.id}" status=${w.status ?? "unknown"} (${w.start_date} to ${w.end_date})`
+  ).join("\n");
+
+  const findingsSummary = findings.length > 0
+    ? findings.map((f) => `- [${f.severity}] ${f.title}: ${f.detail}`).join("\n")
+    : "No issues detected.";
+
+  return `## Current Issues (top 15)\n${issuesSummary}\n\n## Sprints\n${weeksSummary}\n\n## Detected Findings\n${findingsSummary}`;
 }
 
 const graph = new StateGraph(FleetState)
@@ -124,7 +88,8 @@ const graph = new StateGraph(FleetState)
       summary,
       tracePath: "clean_path" as const,
       needsApproval: false,
-      approvalId: undefined
+      approvalId: undefined,
+      chatResponse: undefined
     };
   })
   .addNode("hitlPath", async (state) => {
@@ -137,29 +102,81 @@ const graph = new StateGraph(FleetState)
       summary,
       tracePath: "hitl_path" as const,
       needsApproval: true,
-      approvalId: approval.id
+      approvalId: approval.id,
+      chatResponse: undefined
     };
   })
-  .addConditionalEdges("analyze", (state) => (state.findings.length > 0 ? "hitlPath" : "cleanPath"))
+  .addNode("respondToUser", async (state) => {
+    if (!config.openAiApiKey) {
+      return {
+        summary: "LLM unavailable — cannot answer right now.",
+        tracePath: "on_demand_path" as const,
+        needsApproval: false,
+        approvalId: undefined,
+        chatResponse: "I'm unable to process your request right now. Please try again later."
+      };
+    }
+
+    const model = createModel();
+    const dataContext = formatDataContext(state.issues, state.weeks, state.findings);
+    const userMessage = state.input.message ?? "Give me a project status summary.";
+    const viewContext = state.input.context
+      ? `The user is currently viewing: ${state.input.context.entityType ?? "unknown"} (path: ${state.input.context.pathname ?? "/"})`
+      : "";
+
+    const response = await model.invoke([
+      {
+        role: "system",
+        content: `You are FleetGraph, a project intelligence assistant for Ship. Answer the user's question using ONLY the project data provided below. Be specific — cite issue titles, sprint names, and people by name. Keep answers concise (3-5 sentences max). If you detect problems, mention them proactively.\n\n${viewContext}\n\n${dataContext}`
+      },
+      {
+        role: "user",
+        content: userMessage
+      }
+    ]);
+
+    const chatText = typeof response.content === "string" ? response.content : "Unable to generate a response.";
+
+    return {
+      summary: chatText,
+      tracePath: "on_demand_path" as const,
+      needsApproval: false,
+      approvalId: undefined,
+      chatResponse: chatText
+    };
+  })
+  .addConditionalEdges("analyze", (state) => {
+    if (state.input.mode === "on_demand") return "respondToUser";
+    return state.findings.length > 0 ? "hitlPath" : "cleanPath";
+  })
   .addEdge("__start__", "fetch")
   .addEdge("fetch", "analyze")
   .addEdge("cleanPath", "__end__")
-  .addEdge("hitlPath", "__end__");
+  .addEdge("hitlPath", "__end__")
+  .addEdge("respondToUser", "__end__");
 
 const compiled = graph.compile();
 
 export async function runFleetGraph(input: FleetRequestInput): Promise<FleetResult> {
-  const result = await compiled.invoke({
-    input,
-    issues: [],
-    weeks: [],
-    findings: [],
-    severity: "clean",
-    summary: "",
-    tracePath: "clean_path",
-    needsApproval: false,
-    approvalId: undefined
-  });
+  const result = await compiled.invoke(
+    {
+      input,
+      issues: [],
+      weeks: [],
+      findings: [],
+      severity: "clean",
+      summary: "",
+      tracePath: "clean_path",
+      needsApproval: false,
+      approvalId: undefined,
+      chatResponse: undefined
+    },
+    {
+      runName: `FleetGraph-${input.mode}`,
+      metadata: { mode: input.mode, target: input.target },
+      callbacks: [new LangChainTracer({ projectName: "FleetGraph-MVP" })]
+    }
+  );
 
   return {
     summary: result.summary,
@@ -167,6 +184,7 @@ export async function runFleetGraph(input: FleetRequestInput): Promise<FleetResu
     findings: result.findings,
     needsApproval: result.needsApproval,
     approvalId: result.approvalId,
-    tracePath: result.tracePath
+    tracePath: result.tracePath,
+    chatResponse: result.chatResponse
   };
 }

@@ -30,7 +30,8 @@ export interface FleetResult {
   findings: Finding[];
   needsApproval: boolean;
   approvalId?: string;
-  tracePath: "clean_path" | "hitl_path";
+  tracePath: "clean_path" | "hitl_path" | "on_demand_path";
+  chatResponse?: string;
 }
 
 export interface ShipIssue {
