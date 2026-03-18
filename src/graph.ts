@@ -4,13 +4,16 @@ import { LangChainTracer } from "@langchain/core/tracers/tracer_langchain";
 import { config } from "./config";
 import { createApproval } from "./approvalStore";
 import { ShipClient } from "./shipClient";
-import { staleIssueFindings, sprintHealthFindings, computeSeverity } from "./detectors";
-import type { Finding, FleetRequestInput, FleetResult, Severity, ShipIssue, ShipWeek } from "./types";
+import { staleIssueFindings, sprintHealthFindings, unassignedHighPriorityFindings, missedStandupFindings, computeSeverity } from "./detectors";
+import type { ShipTeamMember } from "./shipClient";
+import type { Finding, FleetRequestInput, FleetResult, Severity, ShipIssue, ShipStandup, ShipWeek } from "./types";
 
 const FleetState = Annotation.Root({
   input: Annotation<FleetRequestInput>(),
   issues: Annotation<ShipIssue[]>(),
   weeks: Annotation<ShipWeek[]>(),
+  standups: Annotation<ShipStandup[]>(),
+  teamMembers: Annotation<ShipTeamMember[]>(),
   findings: Annotation<Finding[]>(),
   severity: Annotation<Severity>(),
   summary: Annotation<string>(),
@@ -20,18 +23,24 @@ const FleetState = Annotation.Root({
   chatResponse: Annotation<string | undefined>()
 });
 
-function createModel(): ChatOpenAI {
-  return new ChatOpenAI({
-    apiKey: config.openAiApiKey,
-    model: config.openAiModel,
-    temperature: 0.1
-  });
+const tracer = new LangChainTracer({ projectName: "FleetGraph-MVP" });
+let model: ChatOpenAI | undefined;
+
+function getModel(): ChatOpenAI {
+  if (!model) {
+    model = new ChatOpenAI({
+      apiKey: config.openAiApiKey,
+      model: config.openAiModel,
+      temperature: 0.1
+    });
+  }
+  return model;
 }
 
 async function summarize(findings: Finding[], fallback: string): Promise<string> {
   if (!config.openAiApiKey || findings.length === 0) return fallback;
 
-  const model = createModel();
+  const model = getModel();
   const findingList = findings.map((f) => `- ${f.title}: ${f.detail}`).join("\n");
   const response = await model.invoke([
     {
@@ -67,13 +76,28 @@ function formatDataContext(issues: ShipIssue[], weeks: ShipWeek[], findings: Fin
 const graph = new StateGraph(FleetState)
   .addNode("fetch", async (state) => {
     const client = new ShipClient(state.input.target);
-    const [issues, weeks] = await Promise.all([client.fetchIssues(), client.fetchWeeks()]);
-    return { issues, weeks };
+    const [issues, weeks, teamMembers] = await Promise.all([
+      client.fetchIssues(),
+      client.fetchWeeks(),
+      client.fetchTeamMembers()
+    ]);
+
+    // Fetch standups for the active week (if one exists)
+    const activeWeek = weeks.find((w) => (w.status ?? "").toLowerCase().includes("active"));
+    const standups = activeWeek ? await client.fetchStandups(activeWeek.id) : [];
+
+    return { issues, weeks, standups, teamMembers };
   })
   .addNode("analyze", (state) => {
+    const activeWeek = state.weeks.find((w) => (w.status ?? "").toLowerCase().includes("active"));
+
     const findings = [
       ...staleIssueFindings(state.issues),
-      ...sprintHealthFindings(state.weeks, state.issues)
+      ...sprintHealthFindings(state.weeks, state.issues),
+      ...unassignedHighPriorityFindings(state.issues),
+      ...(activeWeek
+        ? missedStandupFindings(activeWeek, state.standups, state.teamMembers)
+        : [])
     ];
     const severity = computeSeverity(findings);
     return {
@@ -117,7 +141,7 @@ const graph = new StateGraph(FleetState)
       };
     }
 
-    const model = createModel();
+    const model = getModel();
     const dataContext = formatDataContext(state.issues, state.weeks, state.findings);
     const userMessage = state.input.message ?? "Give me a project status summary.";
     const viewContext = state.input.context
@@ -163,6 +187,8 @@ export async function runFleetGraph(input: FleetRequestInput): Promise<FleetResu
       input,
       issues: [],
       weeks: [],
+      standups: [],
+      teamMembers: [],
       findings: [],
       severity: "clean",
       summary: "",
@@ -174,7 +200,7 @@ export async function runFleetGraph(input: FleetRequestInput): Promise<FleetResu
     {
       runName: `FleetGraph-${input.mode}`,
       metadata: { mode: input.mode, target: input.target },
-      callbacks: [new LangChainTracer({ projectName: "FleetGraph-MVP" })]
+      callbacks: [tracer]
     }
   );
 

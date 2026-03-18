@@ -138,6 +138,10 @@ describe("Test Case 4: Sprint health risk detection", () => {
 // Ship state: user on an issue page asks "What's the status of this issue?"
 // Expected: graph routes to respondToUser (not hitlPath/cleanPath)
 describe("Test Case 5: On-demand routing with context", () => {
+  const decideRoute = (mode: "on_demand" | "proactive", findingsCount: number) => (
+    mode === "on_demand" ? "respondToUser" : findingsCount > 0 ? "hitlPath" : "cleanPath"
+  );
+
   it("graph routes on_demand mode to respondToUser (not proactive paths)", () => {
     // This tests the conditional edge logic from graph.ts:
     // if (state.input.mode === "on_demand") return "respondToUser";
@@ -147,35 +151,31 @@ describe("Test Case 5: On-demand routing with context", () => {
     };
 
     // Simulate the conditional edge function
-    const route = mockState.input.mode === "on_demand"
-      ? "respondToUser"
-      : mockState.findings.length > 0 ? "hitlPath" : "cleanPath";
+    const route = decideRoute(mockState.input.mode, mockState.findings.length);
 
     expect(route).toBe("respondToUser");
   });
 
   it("proactive mode with findings routes to hitlPath", () => {
+    const mode: "on_demand" | "proactive" = "proactive";
     const mockState = {
-      input: { mode: "proactive" as const, target: "prod" as const },
+      input: { mode, target: "prod" as const },
       findings: [{ id: "1", category: "stale_issue" as const, severity: "warning" as const, title: "", detail: "", entityIds: [] }],
     };
 
-    const route = mockState.input.mode === "on_demand"
-      ? "respondToUser"
-      : mockState.findings.length > 0 ? "hitlPath" : "cleanPath";
+    const route = decideRoute(mockState.input.mode, mockState.findings.length);
 
     expect(route).toBe("hitlPath");
   });
 
   it("proactive mode with no findings routes to cleanPath", () => {
+    const mode: "on_demand" | "proactive" = "proactive";
     const mockState = {
-      input: { mode: "proactive" as const, target: "prod" as const },
+      input: { mode, target: "prod" as const },
       findings: [],
     };
 
-    const route = mockState.input.mode === "on_demand"
-      ? "respondToUser"
-      : mockState.findings.length > 0 ? "hitlPath" : "cleanPath";
+    const route = decideRoute(mockState.input.mode, mockState.findings.length);
 
     expect(route).toBe("cleanPath");
   });
