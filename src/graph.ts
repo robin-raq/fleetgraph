@@ -5,6 +5,7 @@ import { config } from "./config";
 import { createApproval } from "./approvalStore";
 import { ShipClient } from "./shipClient";
 import { isActiveWeek, staleIssueFindings, sprintHealthFindings, unassignedHighPriorityFindings, missedStandupFindings, computeSeverity } from "./detectors";
+import { hasDataChanged } from "./dataHash";
 import type { ShipTeamMember } from "./shipClient";
 import type { Finding, FleetRequestInput, FleetResult, Severity, ShipIssue, ShipStandup, ShipWeek } from "./types";
 
@@ -20,7 +21,8 @@ const FleetState = Annotation.Root({
   tracePath: Annotation<"clean_path" | "hitl_path" | "on_demand_path">(),
   needsApproval: Annotation<boolean>(),
   approvalId: Annotation<string | undefined>(),
-  chatResponse: Annotation<string | undefined>()
+  chatResponse: Annotation<string | undefined>(),
+  dataChanged: Annotation<boolean>()
 });
 
 const tracer = new LangChainTracer({ projectName: "FleetGraph-MVP" });
@@ -91,7 +93,11 @@ const graph = new StateGraph(FleetState)
       standupsPromise
     ]);
 
-    return { issues, weeks, standups, teamMembers };
+    const dataChanged = state.input.mode === "on_demand"
+      ? true  // always process on-demand requests
+      : hasDataChanged(state.input.target, issues, weeks, standups, teamMembers);
+
+    return { issues, weeks, standups, teamMembers, dataChanged };
   })
   .addNode("analyze", (state) => {
     const activeWeek = state.weeks.find(isActiveWeek);
@@ -176,6 +182,7 @@ const graph = new StateGraph(FleetState)
   })
   .addConditionalEdges("analyze", (state) => {
     if (state.input.mode === "on_demand") return "respondToUser";
+    if (!state.dataChanged) return "cleanPath";  // skip LLM when data unchanged
     return state.findings.length > 0 ? "hitlPath" : "cleanPath";
   })
   .addEdge("__start__", "fetch")
@@ -200,7 +207,8 @@ export async function runFleetGraph(input: FleetRequestInput): Promise<FleetResu
       tracePath: "clean_path",
       needsApproval: false,
       approvalId: undefined,
-      chatResponse: undefined
+      chatResponse: undefined,
+      dataChanged: true
     },
     {
       runName: `FleetGraph-${input.mode}`,
