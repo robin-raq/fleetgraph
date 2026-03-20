@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { createApproval, listApprovals, updateApproval } from "./approvalStore";
+import { describe, it, expect, beforeEach } from "vitest";
+import { createApproval, listApprovals, updateApproval, clearApprovals } from "./approvalStore";
 import type { Finding } from "./types";
 import { config } from "./config";
 
@@ -13,6 +13,10 @@ const mockFinding: Finding = {
 };
 
 describe("approvalStore", () => {
+  beforeEach(() => {
+    clearApprovals();
+  });
+
   it("creates an approval with pending status", () => {
     const approval = createApproval("prod", [mockFinding]);
     expect(approval.id).toBeTruthy();
@@ -22,8 +26,10 @@ describe("approvalStore", () => {
   });
 
   it("lists all approvals", () => {
+    createApproval("prod", [mockFinding]);
+    createApproval("local", [mockFinding]);
     const all = listApprovals();
-    expect(all.length).toBeGreaterThanOrEqual(1);
+    expect(all).toHaveLength(2);
   });
 
   it("filters approvals by status", () => {

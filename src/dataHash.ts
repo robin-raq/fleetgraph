@@ -17,6 +17,7 @@ export function computeDataHash(
   return createHash("sha256").update(payload).digest("hex");
 }
 
+const MAX_CACHED_TARGETS = 10;
 const lastHashes = new Map<ShipTarget, string>();
 
 /**
@@ -32,6 +33,13 @@ export function hasDataChanged(
 ): boolean {
   const currentHash = computeDataHash(issues, weeks, standups, teamMembers);
   const previousHash = lastHashes.get(target);
+
+  // Defensive cap: evict oldest entry if cache grows beyond expected size
+  if (lastHashes.size >= MAX_CACHED_TARGETS && !lastHashes.has(target)) {
+    const oldest = lastHashes.keys().next().value;
+    if (oldest !== undefined) lastHashes.delete(oldest);
+  }
+
   lastHashes.set(target, currentHash);
   return currentHash !== previousHash;
 }

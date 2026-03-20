@@ -36,6 +36,8 @@ function mapRows<T>(
     .filter(filter);
 }
 
+const clientCache = new Map<ShipTarget, ShipClient>();
+
 export class ShipClient {
   private readonly baseUrl: string;
   private readonly token: string;
@@ -46,6 +48,16 @@ export class ShipClient {
     this.baseUrl = cfg.baseUrl.replace(/\/+$/, "");
     this.token = cfg.token;
     this.timeoutMs = config.shipApiTimeoutMs;
+  }
+
+  /** Returns a cached client per target for HTTP connection reuse. */
+  static for(target: ShipTarget): ShipClient {
+    let client = clientCache.get(target);
+    if (!client) {
+      client = new ShipClient(target);
+      clientCache.set(target, client);
+    }
+    return client;
   }
 
   private async get<T>(path: string): Promise<T> {

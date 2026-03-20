@@ -36,9 +36,14 @@ export function createApproval(target: ShipTarget, findings: Finding[]): Approva
 }
 
 export function listApprovals(status?: ApprovalStatus): ApprovalRecord[] {
-  const all = Array.from(approvals.values()).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const all = Array.from(approvals.values()).reverse();
   if (!status) return all;
   return all.filter((item) => item.status === status);
+}
+
+/** Clear all approvals. Useful for testing. */
+export function clearApprovals(): void {
+  approvals.clear();
 }
 
 export function updateApproval(id: string, status: Exclude<ApprovalStatus, "pending">): ApprovalRecord | null {
