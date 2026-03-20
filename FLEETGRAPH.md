@@ -39,31 +39,39 @@ FleetGraph is a project intelligence agent for Ship that monitors project execut
 
 ```mermaid
 graph TD
-    START(("__start__")) --> fetch["fetch\n(Ship API: issues + weeks +\nteam + standups in parallel)"]
-    fetch --> analyze["analyze\n(4 detectors: stale issues,\nsprint health, unassigned HP,\nmissed standups)"]
+    START(("__start__")) --> context["context\n(resolve who/what/where\nfrom input + route context)"]
+    context --> fetch["fetch\n(Ship API: issues + weeks +\nteam + standups in parallel)"]
+    fetch -->|"fetch succeeded"| analyze["analyze\n(4 detectors: stale issues,\nsprint health, unassigned HP,\nmissed standups)"]
+    fetch -->|"fetch failed"| errorFallback["errorFallback\n(graceful degradation\nmessage)"]
     analyze -->|"mode=proactive\nfindings > 0"| hitlPath["hitlPath\n(LLM summary + create\napproval record)"]
     analyze -->|"mode=proactive\nfindings = 0"| cleanPath["cleanPath\n(LLM summary:\nall clear)"]
     analyze -->|"mode=on_demand"| respondToUser["respondToUser\n(LLM answers user question\nwith project data context)"]
     hitlPath --> END(("__end__"))
     cleanPath --> END
     respondToUser --> END
+    errorFallback --> END
 ```
 
 ### Node Types
 
 | Node | Type | Description |
 |------|------|-------------|
-| `fetch` | **Fetch** | Pulls issues, weeks, team members, and standups from Ship REST API in parallel via `Promise.all`. Standups fetched for active sprint only. |
+| `context` | **Context** | Resolves who is invoking the graph, what they are looking at (entity type, ID, pathname), and produces a view description for downstream LLM prompts. Pure function, no API calls. |
+| `fetch` | **Fetch** | Pulls issues, weeks, team members, and standups from Ship REST API in parallel via `Promise.all`. Standups fetched for active sprint only. Sets `fetchError` flag on failure. |
 | `analyze` | **Reasoning (rule-based)** | Runs 4 detectors: stale issues, sprint health, unassigned high-priority, missed standups. Computes aggregate severity. |
 | `cleanPath` | **Action** | LLM summarizes the clean state. No approval needed. |
 | `hitlPath` | **Action + HITL gate** | LLM summarizes findings. Creates an approval record that must be approved/rejected before any downstream notification. |
 | `respondToUser` | **Reasoning (LLM)** | LLM answers the user's question using fetched Ship data as context. |
+| `errorFallback` | **Error/Fallback** | Returns a graceful degradation message when Ship API is unreachable. No LLM call, no crash. Different messages for proactive vs on-demand modes. |
 
 ### Conditional Edges
 
 | From | Condition | To |
 |------|-----------|-----|
+| `fetch` | `fetchError === true` | `errorFallback` |
+| `fetch` | `fetchError === false` | `analyze` |
 | `analyze` | `mode === "on_demand"` | `respondToUser` |
+| `analyze` | `mode === "proactive" && !dataChanged` | `cleanPath` (skip LLM) |
 | `analyze` | `mode === "proactive" && findings.length > 0` | `hitlPath` |
 | `analyze` | `mode === "proactive" && findings.length === 0` | `cleanPath` |
 
@@ -82,7 +90,11 @@ graph TD
   tracePath: string,          // "clean_path" | "hitl_path" | "on_demand_path"
   needsApproval: boolean,     // whether HITL gate was triggered
   approvalId?: string,        // UUID of approval record
-  chatResponse?: string       // on-demand conversational answer
+  chatResponse?: string,       // on-demand conversational answer
+  dataChanged: boolean,        // whether Ship data changed since last poll
+  fetchError: boolean,         // whether fetch node encountered an error
+  errorMessage: string,        // error details for fallback node
+  viewDescription: string      // human-readable context from context node
 }
 ```
 

@@ -6,6 +6,7 @@ import { createApproval } from "./approvalStore";
 import { ShipClient } from "./shipClient";
 import { isActiveWeek, staleIssueFindings, sprintHealthFindings, unassignedHighPriorityFindings, missedStandupFindings, computeSeverity } from "./detectors";
 import { hasDataChanged } from "./dataHash";
+import { resolveContext } from "./contextResolver";
 import type { ShipTeamMember } from "./shipClient";
 import type { Finding, FleetRequestInput, FleetResult, Severity, ShipIssue, ShipStandup, ShipWeek } from "./types";
 
@@ -22,7 +23,10 @@ const FleetState = Annotation.Root({
   needsApproval: Annotation<boolean>(),
   approvalId: Annotation<string | undefined>(),
   chatResponse: Annotation<string | undefined>(),
-  dataChanged: Annotation<boolean>()
+  dataChanged: Annotation<boolean>(),
+  fetchError: Annotation<boolean>(),
+  errorMessage: Annotation<string>(),
+  viewDescription: Annotation<string>()
 });
 
 const tracer = new LangChainTracer({ projectName: "FleetGraph-MVP" });
@@ -76,28 +80,38 @@ function formatDataContext(issues: ShipIssue[], weeks: ShipWeek[], findings: Fin
 }
 
 const graph = new StateGraph(FleetState)
+  .addNode("context", (state) => {
+    const resolved = resolveContext(state.input);
+    return { viewDescription: resolved.viewDescription };
+  })
   .addNode("fetch", async (state) => {
-    const client = new ShipClient(state.input.target);
+    try {
+      const client = new ShipClient(state.input.target);
 
-    // Fan out: weeks resolves first so standups can start while issues/team are still in flight
-    const weeksPromise = client.fetchWeeks();
-    const standupsPromise = weeksPromise.then((weeks) => {
-      const activeWeek = weeks.find(isActiveWeek);
-      return activeWeek ? client.fetchStandups(activeWeek.id) : [];
-    });
+      // Fan out: weeks resolves first so standups can start while issues/team are still in flight
+      const weeksPromise = client.fetchWeeks();
+      const standupsPromise = weeksPromise.then((weeks) => {
+        const activeWeek = weeks.find(isActiveWeek);
+        return activeWeek ? client.fetchStandups(activeWeek.id) : [];
+      });
 
-    const [issues, weeks, teamMembers, standups] = await Promise.all([
-      client.fetchIssues(),
-      weeksPromise,
-      client.fetchTeamMembers(),
-      standupsPromise
-    ]);
+      const [issues, weeks, teamMembers, standups] = await Promise.all([
+        client.fetchIssues(),
+        weeksPromise,
+        client.fetchTeamMembers(),
+        standupsPromise
+      ]);
 
-    const dataChanged = state.input.mode === "on_demand"
-      ? true  // always process on-demand requests
-      : hasDataChanged(state.input.target, issues, weeks, standups, teamMembers);
+      const dataChanged = state.input.mode === "on_demand"
+        ? true  // always process on-demand requests
+        : hasDataChanged(state.input.target, issues, weeks, standups, teamMembers);
 
-    return { issues, weeks, standups, teamMembers, dataChanged };
+      return { issues, weeks, standups, teamMembers, dataChanged, fetchError: false, errorMessage: "" };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown fetch error";
+      console.error("[fetch] Ship API error:", message);
+      return { fetchError: true, errorMessage: message };
+    }
   })
   .addNode("analyze", (state) => {
     const activeWeek = state.weeks.find(isActiveWeek);
@@ -155,9 +169,7 @@ const graph = new StateGraph(FleetState)
     const model = getModel();
     const dataContext = formatDataContext(state.issues, state.weeks, state.findings);
     const userMessage = state.input.message ?? "Give me a project status summary.";
-    const viewContext = state.input.context
-      ? `The user is currently viewing: ${state.input.context.entityType ?? "unknown"} (path: ${state.input.context.pathname ?? "/"})`
-      : "";
+    const viewContext = state.viewDescription;
 
     const response = await model.invoke([
       {
@@ -180,16 +192,36 @@ const graph = new StateGraph(FleetState)
       chatResponse: chatText
     };
   })
+  .addNode("errorFallback", (state) => {
+    const isOnDemand = state.input.mode === "on_demand";
+    const userMessage = isOnDemand
+      ? `I'm unable to reach Ship right now (${state.errorMessage}). Please try again in a moment.`
+      : `Proactive scan failed: ${state.errorMessage}. Will retry on next scheduled run.`;
+
+    return {
+      summary: userMessage,
+      tracePath: "clean_path" as const,
+      severity: "clean" as const,
+      needsApproval: false,
+      approvalId: undefined,
+      chatResponse: isOnDemand ? userMessage : undefined
+    };
+  })
+  .addConditionalEdges("fetch", (state) => {
+    if (state.fetchError) return "errorFallback";
+    return "analyze";
+  })
   .addConditionalEdges("analyze", (state) => {
     if (state.input.mode === "on_demand") return "respondToUser";
     if (!state.dataChanged) return "cleanPath";  // skip LLM when data unchanged
     return state.findings.length > 0 ? "hitlPath" : "cleanPath";
   })
-  .addEdge("__start__", "fetch")
-  .addEdge("fetch", "analyze")
+  .addEdge("__start__", "context")
+  .addEdge("context", "fetch")
   .addEdge("cleanPath", "__end__")
   .addEdge("hitlPath", "__end__")
-  .addEdge("respondToUser", "__end__");
+  .addEdge("respondToUser", "__end__")
+  .addEdge("errorFallback", "__end__");
 
 const compiled = graph.compile();
 
@@ -208,7 +240,10 @@ export async function runFleetGraph(input: FleetRequestInput): Promise<FleetResu
       needsApproval: false,
       approvalId: undefined,
       chatResponse: undefined,
-      dataChanged: true
+      dataChanged: true,
+      fetchError: false,
+      errorMessage: "",
+      viewDescription: ""
     },
     {
       runName: `FleetGraph-${input.mode}`,

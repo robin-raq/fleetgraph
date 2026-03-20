@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { staleIssueFindings, sprintHealthFindings, computeSeverity } from "./detectors";
-import type { ShipIssue, ShipWeek } from "./types";
+import { resolveContext } from "./contextResolver";
+import type { ShipIssue, ShipWeek, FleetRequestInput, RouteContext } from "./types";
 
 // Fixed "now" for deterministic tests: 2026-03-17T12:00:00Z
 const NOW = new Date("2026-03-17T12:00:00Z").getTime();
@@ -178,5 +179,86 @@ describe("Test Case 5: On-demand routing with context", () => {
     const route = decideRoute(mockState.input.mode, mockState.findings.length);
 
     expect(route).toBe("cleanPath");
+  });
+});
+
+// ─── Context Resolver ────────────────────────────────────────────────
+// The context node establishes who is invoking the graph, what they are
+// looking at, and what their role is. It runs BEFORE fetch.
+describe("Context resolver", () => {
+  it("resolves on-demand mode with entity context", () => {
+    const input: FleetRequestInput = {
+      mode: "on_demand",
+      target: "prod",
+      message: "What's the status?",
+      context: { pathname: "/issues/abc-123", entityType: "issue", entityId: "abc-123" },
+    };
+    const resolved = resolveContext(input);
+    expect(resolved.mode).toBe("on_demand");
+    expect(resolved.entityType).toBe("issue");
+    expect(resolved.entityId).toBe("abc-123");
+    expect(resolved.viewDescription).toContain("issue");
+  });
+
+  it("resolves proactive mode with no context", () => {
+    const input: FleetRequestInput = {
+      mode: "proactive",
+      target: "prod",
+    };
+    const resolved = resolveContext(input);
+    expect(resolved.mode).toBe("proactive");
+    expect(resolved.entityType).toBeUndefined();
+    expect(resolved.entityId).toBeUndefined();
+    expect(resolved.viewDescription).toBe("");
+  });
+
+  it("resolves on-demand mode with pathname but no explicit entity type", () => {
+    const input: FleetRequestInput = {
+      mode: "on_demand",
+      target: "local",
+      message: "Show me the sprint",
+      context: { pathname: "/projects/proj-1/sprints/sprint-5" },
+    };
+    const resolved = resolveContext(input);
+    expect(resolved.mode).toBe("on_demand");
+    expect(resolved.viewDescription).toContain("/projects/proj-1/sprints/sprint-5");
+  });
+
+  it("resolves on-demand with dashboard context (no entity)", () => {
+    const input: FleetRequestInput = {
+      mode: "on_demand",
+      target: "prod",
+      message: "What should I focus on?",
+      context: { pathname: "/dashboard" },
+    };
+    const resolved = resolveContext(input);
+    expect(resolved.mode).toBe("on_demand");
+    expect(resolved.viewDescription).toContain("dashboard");
+  });
+});
+
+// ─── Error/Fallback Routing ──────────────────────────────────────────
+// When fetch fails, the graph should route to errorFallback instead of
+// crashing. The error node returns a graceful degradation response.
+describe("Error fallback routing", () => {
+  const decidePostFetch = (fetchError: boolean, mode: "on_demand" | "proactive") => {
+    if (fetchError) return "errorFallback";
+    return "analyze";
+  };
+
+  it("routes to errorFallback when fetch fails", () => {
+    expect(decidePostFetch(true, "proactive")).toBe("errorFallback");
+  });
+
+  it("routes to errorFallback when fetch fails in on-demand mode", () => {
+    expect(decidePostFetch(true, "on_demand")).toBe("errorFallback");
+  });
+
+  it("routes to analyze when fetch succeeds", () => {
+    expect(decidePostFetch(false, "proactive")).toBe("analyze");
+  });
+
+  it("routes to analyze when fetch succeeds in on-demand mode", () => {
+    expect(decidePostFetch(false, "on_demand")).toBe("analyze");
   });
 });
