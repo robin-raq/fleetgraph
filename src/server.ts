@@ -1,5 +1,5 @@
 import path from "node:path";
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import express from "express";
 import cors from "cors";
 import cron from "node-cron";
@@ -26,12 +26,14 @@ app.use(express.json({ limit: "1mb" }));
 // Serve static test harness (before auth middleware so /test is public)
 app.use(express.static(path.resolve(__dirname, "../public")));
 
+function sha256(value: string): Buffer {
+  return createHash("sha256").update(value).digest();
+}
+
 function apiKeyMatches(provided: string | undefined, expected: string): boolean {
   if (!provided) return false;
-  const expectedBytes = Buffer.from(expected);
-  const providedBytes = Buffer.from(provided);
-  if (expectedBytes.length !== providedBytes.length) return false;
-  return timingSafeEqual(expectedBytes, providedBytes);
+  // Hash both values to normalize length — prevents timing side-channel on key length
+  return timingSafeEqual(sha256(provided), sha256(expected));
 }
 
 app.use((req, res, next) => {
@@ -46,11 +48,11 @@ app.use((req, res, next) => {
 const requestSchema = z.object({
   target: z.enum(["local", "prod"]).default("prod"),
   mode: z.enum(["on_demand", "proactive"]).default("on_demand"),
-  message: z.string().optional(),
+  message: z.string().max(2000).optional(),
   context: z.object({
-    pathname: z.string().optional(),
+    pathname: z.string().max(500).optional(),
     entityType: z.enum(["issue", "project", "program", "sprint", "document", "unknown"]).optional(),
-    entityId: z.string().optional()
+    entityId: z.string().max(200).regex(/^[\w-]+$/, "entityId must be alphanumeric/dashes/underscores").optional()
   }).optional()
 });
 
@@ -127,7 +129,7 @@ if (config.proactiveCronEnabled) {
   cron.schedule(config.proactiveCron, async () => {
     if (proactiveRunInProgress) return;
     proactiveRunInProgress = true;
-    const targets = ["local", "prod"] as const;
+    const targets = config.proactiveTargets;
     try {
       const results = await Promise.allSettled(
         targets.map((target) => runFleetGraph({ mode: "proactive", target }))

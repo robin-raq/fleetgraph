@@ -19,7 +19,7 @@ const FleetState = Annotation.Root({
   findings: Annotation<Finding[]>(),
   severity: Annotation<Severity>(),
   summary: Annotation<string>(),
-  tracePath: Annotation<"clean_path" | "hitl_path" | "on_demand_path">(),
+  tracePath: Annotation<"clean_path" | "hitl_path" | "on_demand_path" | "error_path">(),
   needsApproval: Annotation<boolean>(),
   approvalId: Annotation<string | undefined>(),
   chatResponse: Annotation<string | undefined>(),
@@ -29,8 +29,13 @@ const FleetState = Annotation.Root({
   viewDescription: Annotation<string>()
 });
 
-const tracer = new LangChainTracer({ projectName: "FleetGraph-MVP" });
+let tracer: LangChainTracer | undefined;
 let model: ChatOpenAI | undefined;
+
+function getTracer(): LangChainTracer {
+  if (!tracer) tracer = new LangChainTracer({ projectName: "FleetGraph-MVP" });
+  return tracer;
+}
 
 function getModel(): ChatOpenAI {
   if (!model) {
@@ -46,21 +51,26 @@ function getModel(): ChatOpenAI {
 async function summarize(findings: Finding[], fallback: string): Promise<string> {
   if (!config.openAiApiKey || findings.length === 0) return fallback;
 
-  const model = getModel();
-  const findingList = findings.map((f) => `- ${f.title}: ${f.detail}`).join("\n");
-  const response = await model.invoke([
-    {
-      role: "system",
-      content: "You are a concise engineering assistant. Summarize findings in 2 short sentences."
-    },
-    {
-      role: "user",
-      content: `Summarize:\n${findingList}`
-    }
-  ]);
+  try {
+    const llm = getModel();
+    const findingList = findings.map((f) => `- ${f.title}: ${f.detail}`).join("\n");
+    const response = await llm.invoke([
+      {
+        role: "system",
+        content: "You are a concise engineering assistant. Summarize findings in 2 short sentences."
+      },
+      {
+        role: "user",
+        content: `Summarize:\n${findingList}`
+      }
+    ]);
 
-  const text = typeof response.content === "string" ? response.content : fallback;
-  return text || fallback;
+    const text = typeof response.content === "string" ? response.content : fallback;
+    return text || fallback;
+  } catch (error) {
+    console.error("[summarize] LLM call failed, using fallback:", error instanceof Error ? error.message : error);
+    return fallback;
+  }
 }
 
 function formatDataContext(issues: ShipIssue[], weeks: ShipWeek[], findings: Finding[]): string {
@@ -86,7 +96,7 @@ const graph = new StateGraph(FleetState)
   })
   .addNode("fetch", async (state) => {
     try {
-      const client = new ShipClient(state.input.target);
+      const client = ShipClient.for(state.input.target);
 
       // Fan out: weeks resolves first so standups can start while issues/team are still in flight
       const weeksPromise = client.fetchWeeks();
@@ -110,7 +120,7 @@ const graph = new StateGraph(FleetState)
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown fetch error";
       console.error("[fetch] Ship API error:", message);
-      return { fetchError: true, errorMessage: message };
+      return { fetchError: true, errorMessage: message, issues: [], weeks: [], standups: [], teamMembers: [] };
     }
   })
   .addNode("analyze", (state) => {
@@ -131,16 +141,13 @@ const graph = new StateGraph(FleetState)
       needsApproval: findings.length > 0
     };
   })
-  .addNode("cleanPath", async () => {
-    const summary = await summarize([], "No stale-issue or sprint-health risks detected right now.");
-    return {
-      summary,
-      tracePath: "clean_path" as const,
-      needsApproval: false,
-      approvalId: undefined,
-      chatResponse: undefined
-    };
-  })
+  .addNode("cleanPath", () => ({
+    summary: "No stale-issue or sprint-health risks detected right now.",
+    tracePath: "clean_path" as const,
+    needsApproval: false,
+    approvalId: undefined,
+    chatResponse: undefined
+  }))
   .addNode("hitlPath", async (state) => {
     const summary = await summarize(
       state.findings,
@@ -156,55 +163,69 @@ const graph = new StateGraph(FleetState)
     };
   })
   .addNode("respondToUser", async (state) => {
-    if (!config.openAiApiKey) {
-      return {
-        summary: "LLM unavailable — cannot answer right now.",
-        tracePath: "on_demand_path" as const,
-        needsApproval: false,
-        approvalId: undefined,
-        chatResponse: "I'm unable to process your request right now. Please try again later."
-      };
-    }
-
-    const model = getModel();
-    const dataContext = formatDataContext(state.issues, state.weeks, state.findings);
-    const userMessage = state.input.message ?? "Give me a project status summary.";
-    const viewContext = state.viewDescription;
-
-    const response = await model.invoke([
-      {
-        role: "system",
-        content: `You are FleetGraph, a project intelligence assistant for Ship. Answer the user's question using ONLY the project data provided below. Be specific — cite issue titles, sprint names, and people by name. Keep answers concise (3-5 sentences max). If you detect problems, mention them proactively.\n\n${viewContext}\n\n${dataContext}`
-      },
-      {
-        role: "user",
-        content: userMessage
-      }
-    ]);
-
-    const chatText = typeof response.content === "string" ? response.content : "Unable to generate a response.";
-
-    return {
-      summary: chatText,
+    const unavailable = {
+      summary: "LLM unavailable — cannot answer right now.",
       tracePath: "on_demand_path" as const,
       needsApproval: false,
       approvalId: undefined,
-      chatResponse: chatText
+      chatResponse: "I'm unable to process your request right now. Please try again later."
     };
+
+    if (!config.openAiApiKey) return unavailable;
+
+    try {
+      const llm = getModel();
+      const dataContext = formatDataContext(state.issues, state.weeks, state.findings);
+      const userMessage = state.input.message ?? "Give me a project status summary.";
+      const viewContext = state.viewDescription;
+
+      const response = await llm.invoke([
+        {
+          role: "system",
+          content: `You are FleetGraph, a project intelligence assistant for Ship. Answer the user's question using ONLY the project data provided below. Be specific — cite issue titles, sprint names, and people by name. Keep answers concise (3-5 sentences max). If you detect problems, mention them proactively.\n\n${viewContext}\n\n${dataContext}`
+        },
+        {
+          role: "user",
+          content: userMessage
+        }
+      ]);
+
+      const chatText = typeof response.content === "string" ? response.content : "Unable to generate a response.";
+
+      return {
+        summary: chatText,
+        tracePath: "on_demand_path" as const,
+        needsApproval: false,
+        approvalId: undefined,
+        chatResponse: chatText
+      };
+    } catch (error) {
+      console.error("[respondToUser] LLM call failed:", error instanceof Error ? error.message : error);
+      return unavailable;
+    }
   })
   .addNode("errorFallback", (state) => {
     const isOnDemand = state.input.mode === "on_demand";
-    const userMessage = isOnDemand
-      ? `I'm unable to reach Ship right now (${state.errorMessage}). Please try again in a moment.`
-      : `Proactive scan failed: ${state.errorMessage}. Will retry on next scheduled run.`;
+    // Sanitize: don't leak internal error details to end users
+    const safeMessage = isOnDemand
+      ? "I'm unable to reach the project data source right now. Please try again in a moment."
+      : "Proactive scan failed. Will retry on next scheduled run.";
+
+    if (state.errorMessage) {
+      console.error(`[errorFallback] ${state.input.mode}:`, state.errorMessage);
+    }
 
     return {
-      summary: userMessage,
-      tracePath: "clean_path" as const,
+      summary: safeMessage,
+      tracePath: "error_path" as const,
       severity: "clean" as const,
       needsApproval: false,
       approvalId: undefined,
-      chatResponse: isOnDemand ? userMessage : undefined
+      chatResponse: isOnDemand ? safeMessage : undefined,
+      issues: [],
+      weeks: [],
+      standups: [],
+      teamMembers: []
     };
   })
   .addConditionalEdges("fetch", (state) => {
@@ -248,7 +269,7 @@ export async function runFleetGraph(input: FleetRequestInput): Promise<FleetResu
     {
       runName: `FleetGraph-${input.mode}`,
       metadata: { mode: input.mode, target: input.target },
-      callbacks: [tracer]
+      callbacks: [getTracer()]
     }
   );
 

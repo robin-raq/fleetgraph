@@ -9,14 +9,15 @@ const envSchema = z.object({
   FLEETGRAPH_API_KEY: z.string().optional(),
   CORS_ORIGINS: z.string().default("*"),
   SHIP_API_BASE_URL_LOCAL: z.string().url().default("http://localhost:3000"),
-  SHIP_API_TOKEN_LOCAL: z.string().min(1, "SHIP_API_TOKEN_LOCAL is required"),
+  SHIP_API_TOKEN_LOCAL: z.string().default(""),
   SHIP_API_BASE_URL_PROD: z.string().url().default("https://ship-app-production.up.railway.app"),
-  SHIP_API_TOKEN_PROD: z.string().min(1, "SHIP_API_TOKEN_PROD is required"),
+  SHIP_API_TOKEN_PROD: z.string().default(""),
   SHIP_API_TIMEOUT_MS: z.coerce.number().int().min(1000).max(30000).default(8000),
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_MODEL: z.string().default("gpt-4o-mini"),
   ENABLE_PROACTIVE_CRON: z.string().default("false"),
   PROACTIVE_CRON: z.string().default("*/5 8-18 * * 1-5"),
+  PROACTIVE_TARGETS: z.string().default("prod"),
   MAX_APPROVAL_RECORDS: z.coerce.number().int().min(50).max(10000).default(500)
 });
 
@@ -27,6 +28,11 @@ if (!parsed.success) {
 }
 
 const env = parsed.data;
+const proactiveTargets = env.PROACTIVE_TARGETS
+  .split(",")
+  .map((t) => t.trim())
+  .filter((t): t is "local" | "prod" => t === "local" || t === "prod");
+
 const corsOrigins = env.CORS_ORIGINS === "*"
   ? "*"
   : env.CORS_ORIGINS.split(",").map((origin) => origin.trim()).filter(Boolean);
@@ -40,6 +46,7 @@ export const config = {
   shipApiTimeoutMs: env.SHIP_API_TIMEOUT_MS,
   proactiveCronEnabled: env.ENABLE_PROACTIVE_CRON === "true",
   proactiveCron: env.PROACTIVE_CRON,
+  proactiveTargets,
   maxApprovalRecords: env.MAX_APPROVAL_RECORDS,
   shipTargets: {
     local: {
@@ -54,6 +61,10 @@ export const config = {
 };
 
 export function resolveShipTarget(target: ShipTarget): { baseUrl: string; token: string } {
-  return config.shipTargets[target];
+  const cfg = config.shipTargets[target];
+  if (!cfg.token) {
+    throw new Error(`Ship API token not configured for target "${target}". Set SHIP_API_TOKEN_${target.toUpperCase()}.`);
+  }
+  return cfg;
 }
 
