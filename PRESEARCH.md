@@ -59,7 +59,7 @@ Authentication: **Bearer token** via `Authorization: Bearer <token>` header. API
 
 **Expected query volume?**
 
-- **Proactive mode**: 1 run per project every 30 minutes during business hours (8am-6pm). With ~5 active projects per workspace, that's ~100 proactive runs/day per workspace.
+- **Proactive mode**: 1 run per project every 5 minutes during business hours (8am-6pm). With ~5 active projects per workspace, that's ~600 proactive runs/day per workspace.
 - **On-demand mode**: ~5-10 chat invocations per user per day. With ~10 active users, that's ~50-100 on-demand runs/day per workspace.
 - **Total**: ~150-200 graph runs per day per workspace for MVP.
 

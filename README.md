@@ -11,7 +11,7 @@ A Project Intelligence Agent for [Ship](https://ship-app-production.up.railway.a
 
 Ship shows you what's happening. FleetGraph tells you what's wrong.
 
-- **Proactive mode** — polls Ship every 30 minutes, detects stale issues and sprint health risks, surfaces findings through a human-in-the-loop approval queue
+- **Proactive mode** — polls Ship every 5 minutes, detects stale issues and sprint health risks, surfaces findings through a human-in-the-loop approval queue
 - **On-demand mode** — embedded chat answers questions like "What should I focus on today?" using real project data, scoped to whatever the user is viewing
 - **Same graph, different paths** — both modes run through a single LangGraph architecture with conditional edges that produce visibly different execution traces
 

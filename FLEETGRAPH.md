@@ -5,7 +5,7 @@
 FleetGraph is a project intelligence agent for Ship that monitors project execution quality and surfaces actionable findings backed by evidence. It operates in two modes through a single graph architecture:
 
 **Proactive mode (agent pushes):**
-- Monitors project state on a schedule (polling every 30 minutes during business hours)
+- Monitors project state on a schedule (polling every 5 minutes during business hours)
 - Runs 4 detectors: stale issues (no activity 3+ days), sprint health risks (too many open issues near sprint end), unassigned high-priority work, and missed standups
 - Surfaces findings to the team with specific entity references (issue IDs, sprint names, assignee names)
 - All findings pass through a human-in-the-loop approval gate before any downstream notification
@@ -104,12 +104,12 @@ graph TD
 
 | # | Role | Trigger | Agent Detects / Produces | Human Decides |
 |---|------|---------|--------------------------|---------------|
-| 1 | PM | Proactive (cron every 30 min) | Stale issues — open issues with no activity for 3+ days, lists specific issue titles and assignees | Whether to ping assignees or reprioritize |
-| 2 | PM | Proactive (cron every 30 min) | Sprint health risk — too many open issues with < 3 days remaining in active sprint | Whether to cut scope, extend sprint, or reassign work |
+| 1 | PM | Proactive (cron every 5 min) | Stale issues — open issues with no activity for 3+ days, lists specific issue titles and assignees | Whether to ping assignees or reprioritize |
+| 2 | PM | Proactive (cron every 5 min) | Sprint health risk — too many open issues with < 3 days remaining in active sprint | Whether to cut scope, extend sprint, or reassign work |
 | 3 | Engineer | On-demand (chat from dashboard) | "What should I focus on today?" — prioritized list of assigned issues by urgency and staleness | Which task to start working on |
 | 4 | Director | On-demand (chat from project view) | Project health summary — open issue count, sprint progress, detected risks | Whether to escalate to leadership or intervene |
-| 5 | PM | Proactive (cron every 30 min) | Unassigned high-priority issues — issues marked high/urgent/critical priority with no assignee, severity=critical | Whether to assign or defer |
-| 6 | PM | Proactive (cron every 30 min) | Missed standups — team members who haven't submitted a standup for the active sprint, severity=info | Whether to nudge team members or ignore |
+| 5 | PM | Proactive (cron every 5 min) | Unassigned high-priority issues — issues marked high/urgent/critical priority with no assignee, severity=critical | Whether to assign or defer |
+| 6 | PM | Proactive (cron every 5 min) | Missed standups — team members who haven't submitted a standup for the active sprint, severity=info | Whether to nudge team members or ignore |
 
 ---
 
