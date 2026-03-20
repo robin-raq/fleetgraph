@@ -96,6 +96,9 @@ app.get("/health", (_req, res) => {
 });
 
 app.get("/", (_req, res) => {
+  if (process.env.NODE_ENV === "production") {
+    return res.json({ service: "fleetgraph", docs: "/health" });
+  }
   res.redirect("/test.html");
 });
 

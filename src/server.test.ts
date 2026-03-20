@@ -6,7 +6,7 @@ vi.mock("./graph", () => ({
   runFleetGraph: vi.fn()
 }));
 
-import { app } from "./app";
+import { app, publicErrorMessage } from "./app";
 import { runFleetGraph } from "./graph";
 import { createApproval, clearApprovals } from "./approvalStore";
 import { config } from "./config";
@@ -178,11 +178,25 @@ describe("server", () => {
       expect(res.body.error).toBeTruthy();
     });
 
+    it("shows error details in non-production", () => {
+      const msg = publicErrorMessage(new Error("specific failure"));
+      expect(msg).toBe("specific failure");
+    });
+
     it("hides error details in production", () => {
-      // We test publicErrorMessage indirectly — in prod mode the error body
-      // should not contain the original message. Since we can't easily toggle
-      // NODE_ENV mid-test, we verify the non-production path shows details.
-      // The production branch is tested by checking the function exists.
+      const original = process.env.NODE_ENV;
+      process.env.NODE_ENV = "production";
+      try {
+        const msg = publicErrorMessage(new Error("specific failure"));
+        expect(msg).toBe("Internal server error");
+      } finally {
+        process.env.NODE_ENV = original;
+      }
+    });
+
+    it("handles non-Error objects", () => {
+      const msg = publicErrorMessage("string error");
+      expect(msg).toBe("Unknown server error");
     });
   });
 });
