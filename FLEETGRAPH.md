@@ -184,13 +184,19 @@ This ensures the agent **never acts on its own** for consequential actions. It o
 
 ## Test Cases
 
-| # | Ship State | Expected Output | Trace Link |
-|---|------------|-----------------|------------|
-| 1 | Multiple issues with no activity for 3+ days (real Ship prod data) | Agent detects 8 stale issues, severity=warning, routes to hitl_path, creates approval record | [Proactive hitl_path trace](https://smith.langchain.com/public/86bf7800-87b5-4638-a7ac-a7c7f3dc0df2/r) |
-| 2 | User asks "What should I focus on?" via on-demand chat (real Ship prod data) | Agent fetches issues + weeks, routes to on_demand_path, returns prioritized task list citing specific issue titles and assignees | [On-demand trace](https://smith.langchain.com/public/4fcd07e7-1b67-4dd5-86c5-a4193ce3e53c/r) |
-| 3 | User asks "What is going well on the project?" (on-demand, no negative framing) | Agent routes to on_demand_path, summarizes positive project aspects using real issue/sprint data, no HITL gate triggered | [On-demand clean summary](https://smith.langchain.com/public/96e4d988-29de-4c98-afb2-b80b85408d94/r) |
-| 4 | Proactive scan against prod with 8 stale issues (different run from #1) | Agent detects same stale pattern, routes to hitl_path, creates new approval record — demonstrates consistent detection across runs | [Proactive repeat detection](https://smith.langchain.com/public/4dd3fb3c-9459-45cf-b15c-5be8c85ec829/r) |
-| 5 | User on issue page `/issues/b9921f8d-...` asks "What is the status of this issue?" with entity context | Agent receives entityType=issue + entityId, routes to on_demand_path, responds with issue-specific status using context injection | [On-demand with entity context](https://smith.langchain.com/public/a93d55fb-3d2b-4ee9-b105-50a21e1e52e9/r) |
+Each test case maps to a use case defined above. All traces run against real Ship prod data through the full 7-node graph (context → fetch → analyze → conditional routing).
+
+| # | Use Case | Ship State | Expected Output | Trace Link |
+|---|----------|------------|-----------------|------------|
+| 1 | UC1: Stale issues | 8 open issues with no activity for 3+ days (real Ship prod data) | Agent runs all 4 detectors, detects 8 stale issues, severity=warning, routes to hitl_path, creates approval record | [Proactive hitl_path](https://smith.langchain.com/public/a423de9f-c8f9-4474-bb18-e1a11d050c6c/r) |
+| 2 | UC2: Sprint health | Same proactive scan as #1 — no active sprint within 3 days of deadline in current data | Sprint health detector runs but produces 0 findings (correct: no at-risk sprint). Visible in same trace as #1 — all 4 detectors execute every proactive run | Same trace as #1 |
+| 3 | UC3: Focus today | User asks "What should I focus on today?" from dashboard context (on-demand) | Agent fetches issues + weeks, context node resolves dashboard view, routes to on_demand_path, returns prioritized task list citing specific issue titles and assignees | [On-demand focus](https://smith.langchain.com/public/252b9343-7032-4ae9-abf9-a68c009a7171/r) |
+| 4 | UC4: Project health | User asks "Give me a project health summary" from project view (on-demand) | Agent routes to on_demand_path, summarizes open issue count, sprint progress, and detected risks using real project data | [On-demand health summary](https://smith.langchain.com/public/371dafe8-c559-4ba7-9b21-f2ea89141f4a/r) |
+| 5 | UC5: Unassigned high-priority | Same proactive scan as #1 — all high/urgent/critical issues currently have assignees | Unassigned high-priority detector runs but produces 0 findings (correct: no unassigned high-pri work). Visible in same trace as #1 | Same trace as #1 |
+| 6 | UC6: Missed standups | Same proactive scan as #1 — 11 team members without standups for active sprint | Agent detects 11 missed standups, severity=info, included in hitl_path approval alongside stale issues (19 total findings) | Same trace as #1 |
+| 7 | Diff-based polling | Second proactive scan immediately after #1 — Ship data unchanged | hasDataChanged returns false, graph routes to clean_path, LLM step skipped entirely — demonstrates cost optimization | [Proactive clean_path (diff skip)](https://smith.langchain.com/public/2b80a2a3-98e3-4084-af40-9a8f833ba90d/r) |
+
+**Note on UC2 and UC5:** These detectors are fully unit-tested (32 detector tests) and execute on every proactive run. The current Ship prod data does not trigger them — this is correct behavior (no false positives). The trace for #1 shows all 4 detectors running; only stale_issue and missed_standup produced findings.
 
 ---
 
