@@ -141,6 +141,7 @@ const graph = new StateGraph(FleetState)
       needsApproval: findings.length > 0
     };
   })
+  // Synchronous — no LLM call needed when there are no findings (intentional cost saving)
   .addNode("cleanPath", () => ({
     summary: "No stale-issue or sprint-health risks detected right now.",
     tracePath: "clean_path" as const,

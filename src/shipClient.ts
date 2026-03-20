@@ -124,7 +124,8 @@ export class ShipClient {
         week_id: weekId,
         created_at: pickString(row, ["created_at", "createdAt"])
       }), (s) => !!(s.id && s.user_id));
-    } catch {
+    } catch (error) {
+      console.warn("[ShipClient] fetchStandups failed, returning []:", error instanceof Error ? error.message : error);
       return [];
     }
   }
@@ -136,7 +137,8 @@ export class ShipClient {
         id: pickString(row, ["id"]) ?? "",
         name: pickString(row, ["name", "display_name", "displayName"]) ?? "Unknown"
       }), (m) => !!m.id);
-    } catch {
+    } catch (error) {
+      console.warn("[ShipClient] fetchTeamMembers failed, returning []:", error instanceof Error ? error.message : error);
       return [];
     }
   }

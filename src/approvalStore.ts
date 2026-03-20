@@ -36,6 +36,7 @@ export function createApproval(target: ShipTarget, findings: Finding[]): Approva
 }
 
 export function listApprovals(status?: ApprovalStatus): ApprovalRecord[] {
+  // Map preserves insertion order (oldest first); reverse gives newest-first — O(n) vs sort's O(n log n)
   const all = Array.from(approvals.values()).reverse();
   if (!status) return all;
   return all.filter((item) => item.status === status);

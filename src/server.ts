@@ -1,7 +1,9 @@
 import path from "node:path";
 import { createHash, timingSafeEqual } from "node:crypto";
 import express from "express";
+import helmet from "helmet";
 import cors from "cors";
+import rateLimit from "express-rate-limit";
 import cron from "node-cron";
 import { z } from "zod";
 import { config } from "./config";
@@ -10,6 +12,9 @@ import { listApprovals, updateApproval } from "./approvalStore";
 import type { FleetMode } from "./types";
 
 const app = express();
+
+// Security headers (X-Content-Type-Options, X-Frame-Options, etc.)
+app.use(helmet());
 
 const corsOptions: cors.CorsOptions = config.corsOrigins === "*"
   ? { origin: true }
@@ -23,8 +28,19 @@ const corsOptions: cors.CorsOptions = config.corsOrigins === "*"
 app.use(cors(corsOptions));
 app.use(express.json({ limit: "1mb" }));
 
-// Serve static test harness (before auth middleware so /test is public)
-app.use(express.static(path.resolve(__dirname, "../public")));
+// Rate limit expensive routes (LLM calls + Ship API)
+const llmLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many requests — try again in a minute" }
+});
+
+// Serve static test harness only in non-production
+if (process.env.NODE_ENV !== "production") {
+  app.use(express.static(path.resolve(__dirname, "../public")));
+}
 
 function sha256(value: string): Buffer {
   return createHash("sha256").update(value).digest();
@@ -37,7 +53,10 @@ function apiKeyMatches(provided: string | undefined, expected: string): boolean 
 }
 
 app.use((req, res, next) => {
-  if (!config.fleetgraphApiKey) return next();
+  if (!config.fleetgraphApiKey) {
+    // Health check always open; warn logged at startup (see below)
+    return next();
+  }
   const provided = req.header("x-fleetgraph-key");
   if (!apiKeyMatches(provided, config.fleetgraphApiKey)) {
     return res.status(401).json({ error: "Invalid FleetGraph API key" });
@@ -81,7 +100,7 @@ app.get("/", (_req, res) => {
   res.redirect("/test.html");
 });
 
-app.post("/api/chat", async (req, res) => {
+app.post("/api/chat", llmLimiter, async (req, res) => {
   const parsed = requestSchema.safeParse({
     ...req.body,
     mode: "on_demand" satisfies FleetMode
@@ -96,7 +115,7 @@ app.post("/api/chat", async (req, res) => {
   }
 });
 
-app.post("/api/proactive/run", async (req, res) => {
+app.post("/api/proactive/run", llmLimiter, async (req, res) => {
   const parsed = proactiveRequestSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
@@ -153,5 +172,11 @@ if (config.proactiveCronEnabled) {
 
 app.listen(config.port, () => {
   console.log(`FleetGraph listening on http://localhost:${config.port}`);
+  if (!config.fleetgraphApiKey) {
+    console.warn("⚠ FLEETGRAPH_API_KEY is not set — all endpoints are unauthenticated. Set it in production.");
+  }
+  if (process.env.NODE_ENV === "production") {
+    console.log("Production mode: test harness disabled, security headers active");
+  }
 });
 
