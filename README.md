@@ -2,8 +2,8 @@
 
 A Project Intelligence Agent for [Ship](https://ship-app-production.up.railway.app) — monitors project health proactively, answers questions on demand, and always waits for human approval before acting.
 
-**Live:** https://fleetgraph-production-89ba.up.railway.app
-**Traces:** [Proactive (hitl_path)](https://smith.langchain.com/public/86bf7800-87b5-4638-a7ac-a7c7f3dc0df2/r) · [On-demand](https://smith.langchain.com/public/4fcd07e7-1b67-4dd5-86c5-a4193ce3e53c/r)
+**Live:** https://fleetgraph-production-89ba.up.railway.app/test.html
+**Traces:** [Proactive hitl_path (19 findings)](https://smith.langchain.com/public/94aef05f-d583-45b2-a1a3-9341fad945dc/r) · [On-demand focus](https://smith.langchain.com/public/bd9f2eca-21f8-4747-9ff4-e5d9d0b3ef37/r) · [Diff-based skip](https://smith.langchain.com/public/20f2a2b9-d36f-411e-9986-d7b5c978ba41/r)
 
 ---
 
