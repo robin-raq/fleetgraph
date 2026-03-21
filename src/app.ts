@@ -15,7 +15,16 @@ import type { FleetMode } from "./types";
 export const app = express();
 
 // Security headers (X-Content-Type-Options, X-Frame-Options, etc.)
-app.use(helmet());
+// Allow inline scripts for the test harness; tighten in production if harness is removed
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"],
+      styleSrc: ["'self'", "'unsafe-inline'"]
+    }
+  }
+}));
 
 const corsOptions: cors.CorsOptions = config.corsOrigins === "*"
   ? { origin: true }
