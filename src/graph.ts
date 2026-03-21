@@ -27,6 +27,7 @@ const FleetState = Annotation.Root({
   fetchError: Annotation<boolean>(),
   errorMessage: Annotation<string>(),
   viewDescription: Annotation<string>(),
+  reasoning: Annotation<string>(),
   // Debug counters — exposed in API response for diagnostics
   _issueCount: Annotation<number>(),
   _weekCount: Annotation<number>(),
@@ -153,6 +154,62 @@ const graph = new StateGraph(FleetState)
       needsApproval: findings.length > 0
     };
   })
+  .addNode("reason", async (state) => {
+    // Skip reasoning when no LLM key or no findings in proactive mode
+    if (!config.openAiApiKey) return { reasoning: "" };
+    if (state.input.mode === "proactive" && state.findings.length === 0) return { reasoning: "" };
+
+    try {
+      const llm = getModel();
+      const dataContext = formatDataContext(state.issues, state.weeks, state.findings);
+
+      const findingList = state.findings.length > 0
+        ? state.findings.map((f) => {
+            const rec = f.recommendation ? ` → Recommended: ${f.recommendation}` : "";
+            return `- [${f.severity}] ${f.title}: ${f.detail}${rec}`;
+          }).join("\n")
+        : "No findings from rule-based detectors.";
+
+      const isOnDemand = state.input.mode === "on_demand";
+      const userQuestion = isOnDemand
+        ? `\n\nThe user asks: "${state.input.message ?? "Give me a project status summary."}"\nAnswer their question while incorporating your analysis.`
+        : "";
+
+      const response = await llm.invoke([
+        {
+          role: "system",
+          content: `You are FleetGraph, a project intelligence agent. You have access to project data and rule-based detector findings below.
+
+Your job is to REASON about this data — not just summarize it. Specifically:
+1. Identify RELATIONSHIPS between findings (e.g., "Alice is overloaded AND her issues are going stale — these are related; the root cause is capacity")
+2. Assess COMPOUND RISK — multiple warnings in the same area may indicate a systemic issue
+3. PRIORITIZE recommended actions — what should the PM do FIRST and why
+4. Surface NON-OBVIOUS patterns the detectors may have missed (e.g., all stale issues belong to one project, or one person appears in multiple finding categories)
+
+Be specific: use issue IDs, people names, sprint names. Keep your analysis to 3-5 sentences max.${userQuestion}
+
+${state.viewDescription}
+
+${dataContext}
+
+## Rule-Based Detector Findings
+${findingList}`
+        },
+        {
+          role: "user",
+          content: isOnDemand
+            ? (state.input.message ?? "Give me a project status summary.")
+            : "Analyze these findings. What are the relationships, root causes, and highest-priority actions?"
+        }
+      ]);
+
+      const text = typeof response.content === "string" ? response.content : "";
+      return { reasoning: text };
+    } catch (error) {
+      console.error("[reason] LLM call failed:", error instanceof Error ? error.message : error);
+      return { reasoning: "" };
+    }
+  })
   // Synchronous — no LLM call needed when there are no findings (intentional cost saving)
   .addNode("cleanPath", () => ({
     summary: "No stale-issue or sprint-health risks detected right now.",
@@ -161,11 +218,8 @@ const graph = new StateGraph(FleetState)
     approvalId: undefined,
     chatResponse: undefined
   }))
-  .addNode("hitlPath", async (state) => {
-    const summary = await summarize(
-      state.findings,
-      `Detected ${state.findings.length} finding(s) that require review before notifying the team.`
-    );
+  .addNode("hitlPath", (state) => {
+    const summary = state.reasoning || `Detected ${state.findings.length} finding(s) that require review.`;
     const approval = createApproval(state.input.target, state.findings);
     return {
       summary,
@@ -175,47 +229,16 @@ const graph = new StateGraph(FleetState)
       chatResponse: undefined
     };
   })
-  .addNode("respondToUser", async (state) => {
-    const unavailable = {
-      summary: "LLM unavailable — cannot answer right now.",
+  .addNode("respondToUser", (state) => {
+    // Reasoning node already called the LLM — use its output
+    const chatText = state.reasoning || "I'm unable to process your request right now. Please try again later.";
+    return {
+      summary: chatText,
       tracePath: "on_demand_path" as const,
       needsApproval: false,
       approvalId: undefined,
-      chatResponse: "I'm unable to process your request right now. Please try again later."
+      chatResponse: chatText
     };
-
-    if (!config.openAiApiKey) return unavailable;
-
-    try {
-      const llm = getModel();
-      const dataContext = formatDataContext(state.issues, state.weeks, state.findings);
-      const userMessage = state.input.message ?? "Give me a project status summary.";
-      const viewContext = state.viewDescription;
-
-      const response = await llm.invoke([
-        {
-          role: "system",
-          content: `You are FleetGraph, a project intelligence assistant for Ship. Answer the user's question using ONLY the project data provided below. Be specific — cite issue titles, sprint names, and people by name. Keep answers concise (3-5 sentences max). If you detect problems, mention them proactively.\n\n${viewContext}\n\n${dataContext}`
-        },
-        {
-          role: "user",
-          content: userMessage
-        }
-      ]);
-
-      const chatText = typeof response.content === "string" ? response.content : "Unable to generate a response.";
-
-      return {
-        summary: chatText,
-        tracePath: "on_demand_path" as const,
-        needsApproval: false,
-        approvalId: undefined,
-        chatResponse: chatText
-      };
-    } catch (error) {
-      console.error("[respondToUser] LLM call failed:", error instanceof Error ? error.message : error);
-      return unavailable;
-    }
   })
   .addNode("errorFallback", (state) => {
     const isOnDemand = state.input.mode === "on_demand";
@@ -246,8 +269,14 @@ const graph = new StateGraph(FleetState)
     return "analyze";
   })
   .addConditionalEdges("analyze", (state) => {
+    // Skip reasoning (and LLM) when proactive data is unchanged or no findings
+    if (state.input.mode === "proactive" && !state.dataChanged) return "cleanPath";
+    if (state.input.mode === "proactive" && state.findings.length === 0) return "cleanPath";
+    // All other paths go through reasoning node first
+    return "reason";
+  })
+  .addConditionalEdges("reason", (state) => {
     if (state.input.mode === "on_demand") return "respondToUser";
-    if (!state.dataChanged) return "cleanPath";  // skip LLM when data unchanged
     return state.findings.length > 0 ? "hitlPath" : "cleanPath";
   })
   .addEdge("__start__", "context")
@@ -277,7 +306,8 @@ export async function runFleetGraph(input: FleetRequestInput): Promise<FleetResu
       dataChanged: true,
       fetchError: false,
       errorMessage: "",
-      viewDescription: ""
+      viewDescription: "",
+      reasoning: ""
     },
     {
       runName: `FleetGraph-${input.mode}`,
