@@ -224,6 +224,33 @@ All state lives in the graph's `Annotation.Root`. No external database for agent
 
 Single Express server deployed to Railway with auto-deploy on push. No containerization needed — Railway's Nixpacks auto-detects Node.js. Environment variables managed via Railway dashboard.
 
+### Production Hardening
+
+Security and reliability measures added post-MVP:
+
+| Layer | Implementation |
+|-------|---------------|
+| **HTTP headers** | `helmet()` middleware — sets `X-Content-Type-Options`, `Strict-Transport-Security`, frame protection |
+| **Rate limiting** | `express-rate-limit` on `POST /api/chat` and `POST /api/proactive/run` (20 req/min per IP) |
+| **Input validation** | Zod schemas with `message.max(2000)`, `entityId.regex(/^[\w-]+$/)`, `pathname.max(500)` |
+| **Auth** | SHA-256 normalized `timingSafeEqual` for API key comparison — prevents timing side-channel on key length |
+| **Error sanitization** | `errorFallback` node logs internal errors but returns safe messages to clients; `publicErrorMessage()` hides stack traces in production |
+| **LLM resilience** | `summarize()` and `respondToUser` wrapped in try/catch — LLM failures return fallback text, never crash the graph |
+| **Cron safety** | Overlap guard prevents concurrent proactive runs; `Promise.allSettled` for multi-target polling; configurable `PROACTIVE_TARGETS` |
+| **Test harness** | `public/test.html` only served when `NODE_ENV !== "production"` |
+
+### Test Coverage
+
+89 automated tests across 5 test files:
+
+| File | Tests | What it covers |
+|------|-------|----------------|
+| `detectors.test.ts` | 32 | All 4 detectors: stale issues, sprint health, unassigned HP, missed standups |
+| `graph.test.ts` | 19 | Node routing, conditional edges, context resolution, error fallback |
+| `dataHash.test.ts` | 12 | SHA-256 hashing, cache hit/miss, cache clearing |
+| `approvalStore.test.ts` | 7 | CRUD operations, eviction, status filtering |
+| `server.test.ts` | 19 | Auth middleware, Zod validation, CORS, error responses, rate limiting |
+
 ---
 
 ## Cost Analysis
@@ -232,12 +259,13 @@ Single Express server deployed to Railway with auto-deploy on push. No container
 
 | Item | Amount |
 |------|--------|
-| Claude API - input tokens | N/A (using OpenAI) |
-| Claude API - output tokens | N/A (using OpenAI) |
-| OpenAI API - input tokens | ~50K tokens |
-| OpenAI API - output tokens | ~15K tokens |
-| Total invocations during development | ~30 |
+| LLM provider | OpenAI GPT-4o-mini |
+| Input tokens (development + testing) | ~50K tokens |
+| Output tokens (development + testing) | ~15K tokens |
+| Total graph invocations during development | ~30 |
 | Total development spend | ~$0.05 |
+
+> **Note:** The Claude API requirement was relaxed during the assignment. GPT-4o-mini was chosen for cost efficiency (~$0.001/run). The LangChain abstraction makes swapping to `ChatAnthropic` a one-line change if needed.
 
 ### Production Cost Projections
 
