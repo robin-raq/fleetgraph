@@ -40,13 +40,15 @@ FleetGraph is a project intelligence agent for Ship that monitors project execut
 
 ```mermaid
 graph TD
-    START(("__start__")) --> context["context\n(resolve who/what/where\nfrom input + route context)"]
+    START(("__start__")) --> context["context\n(resolve who/what/where)"]
     context --> fetch["fetch\n(Ship API: issues + weeks +\nteam + standups in parallel)"]
-    fetch -->|"fetch succeeded"| analyze["analyze\n(4 detectors: stale issues,\nsprint health, unassigned HP,\nmissed standups)"]
-    fetch -->|"fetch failed"| errorFallback["errorFallback\n(graceful degradation\nmessage)"]
-    analyze -->|"mode=proactive\nfindings > 0"| hitlPath["hitlPath\n(LLM summary + create\napproval record)"]
-    analyze -->|"mode=proactive\nfindings = 0"| cleanPath["cleanPath\n(LLM summary:\nall clear)"]
-    analyze -->|"mode=on_demand"| respondToUser["respondToUser\n(LLM answers user question\nwith project data context)"]
+    fetch -->|"fetch succeeded"| analyze["analyze\n(8 rule-based detectors)"]
+    fetch -->|"fetch failed"| errorFallback["errorFallback\n(graceful degradation)"]
+    analyze -->|"proactive + no change"| cleanPath["cleanPath\n(skip LLM)"]
+    analyze -->|"proactive + no findings"| cleanPath
+    analyze -->|"findings > 0 OR on_demand"| reason["reason\n(LLM: relationships, root\ncauses, compound risk,\nnon-obvious patterns)"]
+    reason -->|"proactive + findings"| hitlPath["hitlPath\n(create approval record)"]
+    reason -->|"on_demand"| respondToUser["respondToUser\n(return chat response)"]
     hitlPath --> END(("__end__"))
     cleanPath --> END
     respondToUser --> END
@@ -59,10 +61,11 @@ graph TD
 |------|------|-------------|
 | `context` | **Context** | Resolves who is invoking the graph, what they are looking at (entity type, ID, pathname), and produces a view description for downstream LLM prompts. Pure function, no API calls. |
 | `fetch` | **Fetch** | Pulls issues, weeks, team members, and standups from Ship REST API in parallel via `Promise.all`. Standups fetched for active sprint only. Sets `fetchError` flag on failure. |
-| `analyze` | **Reasoning (rule-based)** | Runs 4 detectors: stale issues, sprint health, unassigned high-priority, missed standups. Computes aggregate severity. |
-| `cleanPath` | **Action** | LLM summarizes the clean state. No approval needed. |
-| `hitlPath` | **Action + HITL gate** | LLM summarizes findings. Creates an approval record that must be approved/rejected before any downstream notification. |
-| `respondToUser` | **Reasoning (LLM)** | LLM answers the user's question using fetched Ship data as context. |
+| `analyze` | **Detection (rule-based)** | Runs 8 pure-function detectors: stale issues, sprint health, unassigned high-priority, missed standups, overdue issues, work distribution, scope creep, no sprint plan. Computes aggregate severity. |
+| `reason` | **Reasoning (LLM)** | The LLM performs actual analysis — not formatting or summarizing. It identifies relationships between findings (e.g., "Alice is overloaded AND her issues are stale — root cause is capacity"), assesses compound risk, prioritizes actions, and surfaces non-obvious patterns. For on-demand mode, incorporates the user's question into the reasoning. |
+| `cleanPath` | **Action** | Returns "all clear" synchronously. No LLM call — intentional cost saving when no findings detected. |
+| `hitlPath` | **Action + HITL gate** | Consumes reasoning node's analysis. Creates an approval record that must be approved/rejected before any downstream notification. |
+| `respondToUser` | **Action** | Consumes reasoning node's analysis as the chat response. Returns it to the user. |
 | `errorFallback` | **Error/Fallback** | Returns a graceful degradation message when Ship API is unreachable. No LLM call, no crash. Different messages for proactive vs on-demand modes. |
 
 ### Conditional Edges
@@ -71,10 +74,12 @@ graph TD
 |------|-----------|-----|
 | `fetch` | `fetchError === true` | `errorFallback` |
 | `fetch` | `fetchError === false` | `analyze` |
-| `analyze` | `mode === "on_demand"` | `respondToUser` |
 | `analyze` | `mode === "proactive" && !dataChanged` | `cleanPath` (skip LLM) |
-| `analyze` | `mode === "proactive" && findings.length > 0` | `hitlPath` |
-| `analyze` | `mode === "proactive" && findings.length === 0` | `cleanPath` |
+| `analyze` | `mode === "proactive" && findings === 0` | `cleanPath` (skip LLM) |
+| `analyze` | otherwise (findings > 0 OR on_demand) | `reason` |
+| `reason` | `mode === "on_demand"` | `respondToUser` |
+| `reason` | `findings.length > 0` | `hitlPath` |
+| `reason` | `findings.length === 0` | `cleanPath` |
 
 ### State Schema
 
@@ -85,10 +90,11 @@ graph TD
   weeks: ShipWeek[],          // fetched from Ship API
   standups: ShipStandup[],    // fetched for active sprint
   teamMembers: ShipTeamMember[], // fetched from Ship API
-  findings: Finding[],        // detected problems (4 categories)
+  findings: Finding[],        // detected problems (8 categories)
   severity: Severity,         // "critical" | "warning" | "info" | "clean"
   summary: string,            // LLM-generated summary
-  tracePath: string,          // "clean_path" | "hitl_path" | "on_demand_path"
+  reasoning: string,          // LLM analysis of relationships, risk, and priorities
+  tracePath: string,          // "clean_path" | "hitl_path" | "on_demand_path" | "error_path"
   needsApproval: boolean,     // whether HITL gate was triggered
   approvalId?: string,        // UUID of approval record
   chatResponse?: string,       // on-demand conversational answer
@@ -203,7 +209,7 @@ This ensures the agent **never acts on its own** for consequential actions. It o
 
 ## Test Cases
 
-Each test case maps to a use case defined above. All traces run against real Ship prod data through the full 7-node graph (context → fetch → analyze → conditional routing). All 8 detectors execute on every proactive run.
+Each test case maps to a use case defined above. All traces run against real Ship prod data through the full 8-node graph (context → fetch → analyze → reason → conditional routing). All 8 detectors execute on every proactive run.
 
 | # | Use Case | Ship State | Expected Output | Trace Link |
 |---|----------|------------|-----------------|------------|
