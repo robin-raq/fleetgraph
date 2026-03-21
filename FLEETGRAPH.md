@@ -6,7 +6,8 @@ FleetGraph is a project intelligence agent for Ship that monitors project execut
 
 **Proactive mode (agent pushes):**
 - Monitors project state on a schedule (polling every 5 minutes during business hours)
-- Runs 4 detectors: stale issues (no activity 3+ days), sprint health risks (too many open issues near sprint end), unassigned high-priority work, and missed standups
+- Runs 8 detectors: stale issues (no activity 3+ days), sprint health risks, unassigned high-priority work, missed standups, overdue issues (past due_date), work distribution imbalances, sprint scope creep (unplanned additions), and missing sprint plans
+- Every finding includes a **specific recommended action** (e.g., "Reassign #27 to Bob who has 1 open issue") — not just a problem description
 - Surfaces findings to the team with specific entity references (issue IDs, sprint names, assignee names)
 - All findings pass through a human-in-the-loop approval gate before any downstream notification
 
@@ -104,12 +105,16 @@ graph TD
 
 | # | Role | Trigger | Agent Detects / Produces | Human Decides |
 |---|------|---------|--------------------------|---------------|
-| 1 | PM | Proactive (cron every 5 min) | Stale issues — open issues with no activity for 3+ days, lists specific issue titles and assignees | Whether to ping assignees or reprioritize |
-| 2 | PM | Proactive (cron every 5 min) | Sprint health risk — too many open issues with < 3 days remaining in active sprint | Whether to cut scope, extend sprint, or reassign work |
+| 1 | PM | Proactive (cron every 5 min) | Stale issues — open issues with no activity for 3+ days. Recommends: "Follow up with Alice on #27 or re-scope" | Whether to ping assignees or reprioritize |
+| 2 | PM | Proactive (cron every 5 min) | Sprint health risk — too many open issues with < 3 days remaining. Recommends: "Cut scope or extend sprint — 10 open issues with 1 day remaining" | Whether to cut scope, extend sprint, or reassign work |
 | 3 | Engineer | On-demand (chat from dashboard) | "What should I focus on today?" — prioritized list of assigned issues by urgency and staleness | Which task to start working on |
-| 4 | Director | On-demand (chat from project view) | Project health summary — open issue count, sprint progress, detected risks | Whether to escalate to leadership or intervene |
-| 5 | PM | Proactive (cron every 5 min) | Unassigned high-priority issues — issues marked high/urgent/critical priority with no assignee, severity=critical | Whether to assign or defer |
-| 6 | PM | Proactive (cron every 5 min) | Missed standups — team members who haven't submitted a standup for the active sprint, severity=info | Whether to nudge team members or ignore |
+| 4 | Director | On-demand (chat from project view) | Project health summary — open issue count, sprint progress, detected risks, actionable recommendations | Whether to escalate to leadership or intervene |
+| 5 | PM | Proactive (cron every 5 min) | Unassigned high-priority issues (severity=critical). Recommends: "Assign #5 to a team member with capacity" | Whether to assign or defer |
+| 6 | PM | Proactive (cron every 5 min) | Missed standups (severity=info). Recommends: "Nudge Bob to submit their standup for Sprint 15" | Whether to nudge team members or ignore |
+| 7 | PM | Proactive (cron every 5 min) | Overdue issues — past explicit `due_date` (severity=critical). Recommends: "Reassign or re-scope #42: 3 days past due" | Whether to reassign, extend deadline, or close |
+| 8 | Lead | Proactive (cron every 5 min) | Work distribution imbalance — team member has >2x average open issues. Recommends: "Reassign from Alice (9 open, ~54pt) to Bob (1 open)" | Whether to rebalance or accept current distribution |
+| 9 | PM | Proactive (cron every 5 min) | Sprint scope creep — >2 unplanned issues added after sprint planning. Recommends: "Defer Bug fix, Hotfix to next sprint" | Whether to remove added issues or accept scope increase |
+| 10 | PM | Proactive (cron every 5 min) | No sprint plan — active sprint has `has_plan: false` (severity=info). Recommends: "Create a sprint plan for Sprint 15" | Whether to create a plan now or defer |
 
 ---
 
@@ -158,6 +163,20 @@ Assumptions: 120 polls/day per project (every 5 min × 10 hours business hours),
 - Increase interval to 15 min for low-priority projects
 - Use cheaper model for triage, full model only when findings detected
 
+### Should Ship have webhooks?
+
+**Yes.** The strongest use case is real-time detection of critical state changes that demand immediate action:
+
+| Webhook Event | FleetGraph Use Case | Why Polling Falls Short |
+|---|---|---|
+| `issue.state_changed` | Detect when issues move to "blocked" or get reopened after completion | A blocked P0 sitting undetected for 5 min during an incident is costly |
+| `issue.assigned` / `issue.unassigned` | Real-time work distribution rebalancing | Polling detects imbalance 5 min late — by then the PM may have already moved on |
+| `standup.submitted` | Update missed standup findings instantly | Currently re-polls all data to discover a single standup was submitted |
+| `sprint.started` / `sprint.completed` | Trigger sprint boundary analysis (plan completeness, scope creep baseline) | Polling discovers sprint transitions up to 5 min late, missing the "sprint just started" moment |
+| `issue.created` | Real-time scope creep detection when issues are added mid-sprint | The scope creep detector currently relies on the next poll to discover new additions |
+
+**Impact:** Webhooks would reduce detection latency from 2.5 min (average) to <1s, eliminate ~95% of redundant polling calls, and enable event-driven architecture where the agent reacts to what happened instead of periodically scanning for changes. The diff-based polling optimization (SHA-256 hash skip) is our workaround for the absence of webhooks — it saves LLM costs but still makes Ship API calls every 5 minutes to compute the hash.
+
 ### Configuration
 
 ```
@@ -184,19 +203,23 @@ This ensures the agent **never acts on its own** for consequential actions. It o
 
 ## Test Cases
 
-Each test case maps to a use case defined above. All traces run against real Ship prod data through the full 7-node graph (context → fetch → analyze → conditional routing).
+Each test case maps to a use case defined above. All traces run against real Ship prod data through the full 7-node graph (context → fetch → analyze → conditional routing). All 8 detectors execute on every proactive run.
 
 | # | Use Case | Ship State | Expected Output | Trace Link |
 |---|----------|------------|-----------------|------------|
-| 1 | UC1: Stale issues | 8 open issues with no activity for 3+ days (real Ship prod data) | Agent runs all 4 detectors, detects 8 stale issues + 11 missed standups (19 total), severity=warning, routes to hitl_path, creates approval record | [Proactive hitl_path](https://smith.langchain.com/public/bd9f2eca-21f8-4747-9ff4-e5d9d0b3ef37/r) |
-| 2 | UC2: Sprint health | Same proactive scan as #1 — no active sprint within 3 days of deadline in current data | Sprint health detector runs but produces 0 findings (correct: no at-risk sprint). Visible in same trace as #1 — all 4 detectors execute every proactive run | Same trace as #1 |
-| 3 | UC3: Focus today | User asks "What should I focus on today?" from dashboard context (on-demand) | Agent fetches issues + weeks, context node resolves dashboard view, routes to on_demand_path, returns prioritized task list citing specific issue titles and assignees | [On-demand focus](https://smith.langchain.com/public/20f2a2b9-d36f-411e-9986-d7b5c978ba41/r) |
-| 4 | UC4: Project health | User asks "Give me a project health summary" from project view (on-demand) | Agent routes to on_demand_path, summarizes open issue count, sprint progress, and detected risks using real project data | [On-demand health summary](https://smith.langchain.com/public/94aef05f-d583-45b2-a1a3-9341fad945dc/r) |
-| 5 | UC5: Unassigned high-priority | Same proactive scan as #1 — all high/urgent/critical issues currently have assignees | Unassigned high-priority detector runs but produces 0 findings (correct: no unassigned high-pri work). Visible in same trace as #1 | Same trace as #1 |
-| 6 | UC6: Missed standups | Same proactive scan as #1 — 11 team members without standups for active sprint | Agent detects 11 missed standups, severity=info, included in hitl_path approval alongside stale issues (19 total findings) | Same trace as #1 |
-| 7 | Diff-based polling | Second proactive scan immediately after #1 — Ship data unchanged | hasDataChanged returns false, graph routes to clean_path, LLM step skipped entirely — demonstrates cost optimization | [Proactive clean_path (diff skip)](https://smith.langchain.com/public/9e3cee7f-bc09-4889-89f7-0184bc025dc1/r) |
+| 1 | UC1: Stale issues | 8 open issues with no activity for 3+ days | 8 stale issue findings with actionable recommendations (e.g., "Follow up with Dev User on #27"), routes to hitl_path | [Proactive hitl_path](https://smith.langchain.com/public/bd9f2eca-21f8-4747-9ff4-e5d9d0b3ef37/r) |
+| 2 | UC2: Sprint health | No active sprint within 3 days of deadline | Sprint health detector produces 0 findings (correct: no at-risk sprint). All 8 detectors visible in trace | Same trace as #1 |
+| 3 | UC3: Focus today | User asks "What should I focus on today?" from dashboard | Context node resolves dashboard view, on_demand_path, returns prioritized task list with names and issue IDs | [On-demand focus](https://smith.langchain.com/public/20f2a2b9-d36f-411e-9986-d7b5c978ba41/r) |
+| 4 | UC4: Project health | User asks "Give me a project health summary" from project view | on_demand_path, summarizes issues, sprint progress, and detected risks | [On-demand health](https://smith.langchain.com/public/94aef05f-d583-45b2-a1a3-9341fad945dc/r) |
+| 5 | UC5: Unassigned high-priority | All high/urgent/critical issues have assignees | 0 findings (correct: no unassigned high-pri). Detector runs in same trace as #1 | Same trace as #1 |
+| 6 | UC6: Missed standups | 11 team members without standups for active sprint | 11 missed standup findings with recommendations ("Nudge Bob to submit standup for Sprint 15") | Same trace as #1 |
+| 7 | UC7: Overdue issues | No issues with `due_date` in the past in current data | 0 findings (correct: no overdue issues). Detector runs in same trace as #1 | Same trace as #1 |
+| 8 | UC8: Work distribution | Current data does not trigger >2x mean threshold | 0 findings (correct: team is balanced enough). Detector runs in same trace as #1 | Same trace as #1 |
+| 9 | UC9: Scope creep | Active sprint `planned_issue_ids` vs current issues | Result depends on Ship data state. Detector runs in same trace as #1 | Same trace as #1 |
+| 10 | UC10: No sprint plan | Active sprint has `has_plan: false` | 1 finding: "Create a sprint plan for Sprint 15" (severity=info) | Same trace as #1 |
+| 11 | Diff-based polling | Second proactive scan — Ship data unchanged | hasDataChanged returns false, routes to clean_path, LLM skipped | [Proactive clean_path](https://smith.langchain.com/public/9e3cee7f-bc09-4889-89f7-0184bc025dc1/r) |
 
-**Note on UC2 and UC5:** These detectors are fully unit-tested (32 detector tests) and execute on every proactive run. The current Ship prod data does not trigger them — this is correct behavior (no false positives). The trace for #1 shows all 4 detectors running; only stale_issue and missed_standup produced findings.
+**Note on zero-finding detectors (UC2, UC5, UC7, UC8, UC9):** These detectors are fully unit-tested (61 detector tests) and execute on every proactive run. The current Ship prod data does not trigger them — this is correct behavior (no false positives). All 8 detectors are visible in the trace for #1.
 
 ---
 
@@ -241,11 +264,11 @@ Security and reliability measures added post-MVP:
 
 ### Test Coverage
 
-89 automated tests across 5 test files:
+118 automated tests across 5 test files:
 
 | File | Tests | What it covers |
 |------|-------|----------------|
-| `detectors.test.ts` | 32 | All 4 detectors: stale issues, sprint health, unassigned HP, missed standups |
+| `detectors.test.ts` | 61 | All 8 detectors: stale issues, sprint health, unassigned HP, missed standups, overdue issues, work distribution, scope creep, no sprint plan + recommendation assertions |
 | `graph.test.ts` | 19 | Node routing, conditional edges, context resolution, error fallback |
 | `dataHash.test.ts` | 12 | SHA-256 hashing, cache hit/miss, cache clearing |
 | `approvalStore.test.ts` | 7 | CRUD operations, eviction, status filtering |
