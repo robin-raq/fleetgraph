@@ -26,7 +26,12 @@ const FleetState = Annotation.Root({
   dataChanged: Annotation<boolean>(),
   fetchError: Annotation<boolean>(),
   errorMessage: Annotation<string>(),
-  viewDescription: Annotation<string>()
+  viewDescription: Annotation<string>(),
+  // Debug counters — exposed in API response for diagnostics
+  _issueCount: Annotation<number>(),
+  _weekCount: Annotation<number>(),
+  _standupCount: Annotation<number>(),
+  _teamMemberCount: Annotation<number>()
 });
 
 let tracer: LangChainTracer | undefined;
@@ -116,7 +121,7 @@ const graph = new StateGraph(FleetState)
         ? true  // always process on-demand requests
         : hasDataChanged(state.input.target, issues, weeks, standups, teamMembers);
 
-      return { issues, weeks, standups, teamMembers, dataChanged, fetchError: false, errorMessage: "" };
+      return { issues, weeks, standups, teamMembers, dataChanged, fetchError: false, errorMessage: "", _issueCount: issues.length, _weekCount: weeks.length, _standupCount: standups.length, _teamMemberCount: teamMembers.length };
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown fetch error";
       console.error("[fetch] Ship API error:", message);
@@ -283,10 +288,10 @@ export async function runFleetGraph(input: FleetRequestInput): Promise<FleetResu
     tracePath: result.tracePath,
     chatResponse: result.chatResponse,
     _debug: {
-      issueCount: result.issues.length,
-      weekCount: result.weeks.length,
-      standupCount: result.standups.length,
-      teamMemberCount: result.teamMembers.length,
+      issueCount: result._issueCount,
+      weekCount: result._weekCount,
+      standupCount: result._standupCount,
+      teamMemberCount: result._teamMemberCount,
       dataChanged: result.dataChanged,
       fetchError: result.fetchError
     }
