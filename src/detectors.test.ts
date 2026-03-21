@@ -8,6 +8,7 @@ import {
   overdueIssueFindings,
   workDistributionFindings,
   scopeCreepFindings,
+  noSprintPlanFindings,
   computeSeverity
 } from "./detectors";
 import type { Finding, ShipIssue, ShipStandup, ShipWeek } from "./types";
@@ -536,5 +537,76 @@ describe("scopeCreepFindings", () => {
     ];
     const findings = scopeCreepFindings([activeWeek], issues);
     expect(findings[0].recommendation).toContain("Bug fix");
+  });
+});
+
+// ─────────────────────────────────────────────
+// No Sprint Plan Detector
+// ─────────────────────────────────────────────
+
+describe("noSprintPlanFindings", () => {
+  it("flags active sprint with has_plan false", () => {
+    const weeks: ShipWeek[] = [{ id: "w1", title: "Sprint 15", status: "active", has_plan: false }];
+    const findings = noSprintPlanFindings(weeks);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].category).toBe("no_sprint_plan");
+    expect(findings[0].severity).toBe("info");
+    expect(findings[0].recommendation).toContain("Sprint 15");
+  });
+
+  it("no finding when has_plan is true", () => {
+    const weeks: ShipWeek[] = [{ id: "w1", title: "Sprint 15", status: "active", has_plan: true }];
+    expect(noSprintPlanFindings(weeks)).toHaveLength(0);
+  });
+
+  it("no finding when has_plan is undefined (graceful)", () => {
+    const weeks: ShipWeek[] = [{ id: "w1", title: "Sprint 15", status: "active" }];
+    expect(noSprintPlanFindings(weeks)).toHaveLength(0);
+  });
+
+  it("no finding when no active week", () => {
+    const weeks: ShipWeek[] = [{ id: "w1", title: "Sprint 14", status: "completed", has_plan: false }];
+    expect(noSprintPlanFindings(weeks)).toHaveLength(0);
+  });
+});
+
+// ─────────────────────────────────────────────
+// Existing detectors: recommendation field
+// ─────────────────────────────────────────────
+
+describe("recommendation field on existing detectors", () => {
+  it("staleIssueFindings includes recommendation", () => {
+    const issues: ShipIssue[] = [
+      { id: "1", title: "Old task", state: "todo", updated_at: daysAgo(5), assignee_name: "Alice", display_id: "#10" }
+    ];
+    const findings = staleIssueFindings(issues, NOW);
+    expect(findings[0].recommendation).toBeDefined();
+    expect(findings[0].recommendation).toContain("Alice");
+    expect(findings[0].recommendation).toContain("#10");
+  });
+
+  it("sprintHealthFindings includes recommendation", () => {
+    const week: ShipWeek = { id: "w1", title: "Sprint 5", status: "active", end_date: new Date(NOW + 1 * 24 * 60 * 60 * 1000).toISOString() };
+    const issues: ShipIssue[] = Array.from({ length: 10 }, (_, i) => ({ id: `i-${i}`, title: `Task ${i}`, state: "todo" }));
+    const findings = sprintHealthFindings([week], issues, NOW);
+    expect(findings[0].recommendation).toBeDefined();
+    expect(findings[0].recommendation).toContain("10");
+  });
+
+  it("unassignedHighPriorityFindings includes recommendation", () => {
+    const issues: ShipIssue[] = [
+      { id: "1", title: "P0 bug", state: "todo", priority: "critical", assignee_id: null, display_id: "#5" }
+    ];
+    const findings = unassignedHighPriorityFindings(issues);
+    expect(findings[0].recommendation).toBeDefined();
+    expect(findings[0].recommendation).toContain("#5");
+  });
+
+  it("missedStandupFindings includes recommendation", () => {
+    const week: ShipWeek = { id: "w1", title: "Sprint 5", status: "active" };
+    const findings = missedStandupFindings(week, [], [{ id: "u1", name: "Bob" }]);
+    expect(findings[0].recommendation).toBeDefined();
+    expect(findings[0].recommendation).toContain("Bob");
+    expect(findings[0].recommendation).toContain("Sprint 5");
   });
 });

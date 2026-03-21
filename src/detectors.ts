@@ -25,14 +25,19 @@ export function staleIssueFindings(issues: ShipIssue[], nowMs: number = Date.now
       return nowMs - updated >= staleMs;
     })
     .slice(0, 8)
-    .map((issue) => ({
-      id: `stale-${issue.id}`,
-      category: "stale_issue" as const,
-      severity: "warning" as const,
-      title: `Stale issue: ${issue.title}`,
-      detail: `Issue ${issue.id} appears inactive for 3+ days and is still not done.`,
-      entityIds: [issue.id]
-    }));
+    .map((issue) => {
+      const label = issue.display_id ?? issue.id;
+      const who = issue.assignee_name ?? "the assignee";
+      return {
+        id: `stale-${issue.id}`,
+        category: "stale_issue" as const,
+        severity: "warning" as const,
+        title: `Stale issue: ${issue.title}`,
+        detail: `Issue ${label} appears inactive for 3+ days and is still not done.`,
+        entityIds: [issue.id],
+        recommendation: `Follow up with ${who} on ${label} or re-scope if no longer needed.`
+      };
+    });
 }
 
 export function sprintHealthFindings(weeks: ShipWeek[], issues: ShipIssue[], nowMs: number = Date.now()): Finding[] {
@@ -53,7 +58,8 @@ export function sprintHealthFindings(weeks: ShipWeek[], issues: ShipIssue[], now
       severity: "warning" as const,
       title: `Sprint health risk: ${activeWeek.title ?? activeWeek.id}`,
       detail: `${openIssues} issues are still open with ${Math.max(daysRemaining, 0)} day(s) left in the active sprint.`,
-      entityIds: [activeWeek.id]
+      entityIds: [activeWeek.id],
+      recommendation: `Cut scope or extend sprint — ${openIssues} open issues with ${Math.max(daysRemaining, 0)} day(s) remaining.`
     }
   ];
 }
@@ -70,14 +76,18 @@ export function unassignedHighPriorityFindings(issues: ShipIssue[]): Finding[] {
       );
     })
     .slice(0, 10)
-    .map((issue) => ({
-      id: `unassigned-hp-${issue.id}`,
-      category: "unassigned_high_priority" as const,
-      severity: "critical" as const,
-      title: `Unassigned high-priority: ${issue.title}`,
-      detail: `Issue ${issue.id} is ${issue.priority} priority but has no assignee.`,
-      entityIds: [issue.id]
-    }));
+    .map((issue) => {
+      const label = issue.display_id ?? issue.id;
+      return {
+        id: `unassigned-hp-${issue.id}`,
+        category: "unassigned_high_priority" as const,
+        severity: "critical" as const,
+        title: `Unassigned high-priority: ${issue.title}`,
+        detail: `Issue ${label} is ${issue.priority} priority but has no assignee.`,
+        entityIds: [issue.id],
+        recommendation: `Assign ${label} to a team member with capacity.`
+      };
+    });
 }
 
 export function missedStandupFindings(
@@ -91,14 +101,18 @@ export function missedStandupFindings(
 
   return teamMembers
     .filter((member) => !submittedUserIds.has(member.id))
-    .map((member) => ({
-      id: `missed-standup-${activeWeek.id}-${member.id}`,
-      category: "missed_standup" as const,
-      severity: "info" as const,
-      title: `Missed standup: ${member.name}`,
-      detail: `${member.name} has not submitted a standup for ${activeWeek.title ?? activeWeek.id}.`,
-      entityIds: [member.id, activeWeek.id]
-    }));
+    .map((member) => {
+      const weekLabel = activeWeek.title ?? activeWeek.id;
+      return {
+        id: `missed-standup-${activeWeek.id}-${member.id}`,
+        category: "missed_standup" as const,
+        severity: "info" as const,
+        title: `Missed standup: ${member.name}`,
+        detail: `${member.name} has not submitted a standup for ${weekLabel}.`,
+        entityIds: [member.id, activeWeek.id],
+        recommendation: `Nudge ${member.name} to submit their standup for ${weekLabel}.`
+      };
+    });
 }
 
 export function overdueIssueFindings(issues: ShipIssue[], nowMs: number = Date.now()): Finding[] {
@@ -183,6 +197,22 @@ export function workDistributionFindings(issues: ShipIssue[], teamMembers: ShipT
       entityIds: [] as string[],
       recommendation: `Consider reassigning issues from ${e.name} (${e.count} open, ~${e.estimate} pt) to ${lightest.name} (${lightest.count} open).`
     }));
+}
+
+export function noSprintPlanFindings(weeks: ShipWeek[]): Finding[] {
+  const activeWeek = weeks.find(isActiveWeek);
+  if (!activeWeek || activeWeek.has_plan !== false) return [];
+
+  const label = activeWeek.title ?? activeWeek.id;
+  return [{
+    id: `no-plan-${activeWeek.id}`,
+    category: "no_sprint_plan" as const,
+    severity: "info" as const,
+    title: `No sprint plan: ${label}`,
+    detail: `${label} is active but has no sprint plan. Planning enables scope tracking and completion forecasting.`,
+    entityIds: [activeWeek.id],
+    recommendation: `Create a sprint plan for ${label} to enable scope tracking and completion forecasting.`
+  }];
 }
 
 export function computeSeverity(findings: Finding[]): Severity {

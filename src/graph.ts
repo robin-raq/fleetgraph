@@ -4,7 +4,7 @@ import { LangChainTracer } from "@langchain/core/tracers/tracer_langchain";
 import { config } from "./config";
 import { createApproval } from "./approvalStore";
 import { ShipClient } from "./shipClient";
-import { isActiveWeek, staleIssueFindings, sprintHealthFindings, unassignedHighPriorityFindings, missedStandupFindings, overdueIssueFindings, workDistributionFindings, scopeCreepFindings, computeSeverity } from "./detectors";
+import { isActiveWeek, staleIssueFindings, sprintHealthFindings, unassignedHighPriorityFindings, missedStandupFindings, overdueIssueFindings, workDistributionFindings, scopeCreepFindings, noSprintPlanFindings, computeSeverity } from "./detectors";
 import { hasDataChanged } from "./dataHash";
 import { resolveContext } from "./contextResolver";
 import type { ShipTeamMember } from "./shipClient";
@@ -58,15 +58,18 @@ async function summarize(findings: Finding[], fallback: string): Promise<string>
 
   try {
     const llm = getModel();
-    const findingList = findings.map((f) => `- ${f.title}: ${f.detail}`).join("\n");
+    const findingList = findings.map((f) => {
+      const rec = f.recommendation ? ` → Recommendation: ${f.recommendation}` : "";
+      return `- [${f.severity}] ${f.title}: ${f.detail}${rec}`;
+    }).join("\n");
     const response = await llm.invoke([
       {
         role: "system",
-        content: "You are a concise engineering assistant. Summarize findings in 2 short sentences."
+        content: "You are FleetGraph, a project intelligence agent. Given these findings, produce:\n1. A 2-sentence summary of the situation.\n2. A numbered list of specific recommended actions (use issue IDs, people names, and sprint names).\nEach recommendation should be a concrete action a PM could take right now — not a vague suggestion.\nIf a finding includes a recommendation, incorporate it."
       },
       {
         role: "user",
-        content: `Summarize:\n${findingList}`
+        content: `Findings:\n${findingList}`
       }
     ]);
 
@@ -138,6 +141,7 @@ const graph = new StateGraph(FleetState)
       ...overdueIssueFindings(state.issues),
       ...workDistributionFindings(state.issues, state.teamMembers),
       ...scopeCreepFindings(state.weeks, state.issues),
+      ...noSprintPlanFindings(state.weeks),
       ...(activeWeek
         ? missedStandupFindings(activeWeek, state.standups, state.teamMembers)
         : [])
