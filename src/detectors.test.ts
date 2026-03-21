@@ -5,6 +5,7 @@ import {
   sprintHealthFindings,
   unassignedHighPriorityFindings,
   missedStandupFindings,
+  overdueIssueFindings,
   computeSeverity
 } from "./detectors";
 import type { Finding, ShipIssue, ShipStandup, ShipWeek } from "./types";
@@ -14,6 +15,10 @@ const NOW = new Date("2026-03-17T12:00:00Z").getTime();
 
 function daysAgo(days: number): string {
   return new Date(NOW - days * 24 * 60 * 60 * 1000).toISOString();
+}
+
+function daysFromNow(days: number): string {
+  return new Date(NOW + days * 24 * 60 * 60 * 1000).toISOString();
 }
 
 describe("toDate", () => {
@@ -310,5 +315,82 @@ describe("missedStandupFindings", () => {
   it("includes the week title in finding detail", () => {
     const findings = missedStandupFindings(activeWeek, [], teamMembers);
     expect(findings[0].detail).toContain("Sprint 5");
+  });
+});
+
+// ─────────────────────────────────────────────
+// Overdue Issue Detector
+// ─────────────────────────────────────────────
+
+describe("overdueIssueFindings", () => {
+  it("flags issue past due_date", () => {
+    const issues: ShipIssue[] = [
+      { id: "1", title: "Late task", state: "todo", due_date: daysAgo(2), display_id: "#27" },
+    ];
+    const findings = overdueIssueFindings(issues, NOW);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].category).toBe("overdue_issue");
+    expect(findings[0].severity).toBe("critical");
+  });
+
+  it("ignores done issues even if overdue", () => {
+    const issues: ShipIssue[] = [
+      { id: "1", title: "Done task", state: "done", due_date: daysAgo(5) },
+    ];
+    expect(overdueIssueFindings(issues, NOW)).toHaveLength(0);
+  });
+
+  it("ignores cancelled issues even if overdue", () => {
+    const issues: ShipIssue[] = [
+      { id: "1", title: "Cancelled task", state: "cancelled", due_date: daysAgo(5) },
+    ];
+    expect(overdueIssueFindings(issues, NOW)).toHaveLength(0);
+  });
+
+  it("ignores issues with no due_date", () => {
+    const issues: ShipIssue[] = [
+      { id: "1", title: "No due", state: "todo", due_date: null },
+      { id: "2", title: "No field", state: "todo" },
+    ];
+    expect(overdueIssueFindings(issues, NOW)).toHaveLength(0);
+  });
+
+  it("ignores issues with future due_date", () => {
+    const issues: ShipIssue[] = [
+      { id: "1", title: "Future task", state: "todo", due_date: daysFromNow(3) },
+    ];
+    expect(overdueIssueFindings(issues, NOW)).toHaveLength(0);
+  });
+
+  it("boundary: due_date exactly now is not overdue", () => {
+    const issues: ShipIssue[] = [
+      { id: "1", title: "Due now", state: "todo", due_date: new Date(NOW).toISOString() },
+    ];
+    expect(overdueIssueFindings(issues, NOW)).toHaveLength(0);
+  });
+
+  it("caps at 10 findings", () => {
+    const issues: ShipIssue[] = Array.from({ length: 15 }, (_, i) => ({
+      id: `issue-${i}`, title: `Overdue ${i}`, state: "todo", due_date: daysAgo(i + 1)
+    }));
+    expect(overdueIssueFindings(issues, NOW)).toHaveLength(10);
+  });
+
+  it("includes recommendation with display_id", () => {
+    const issues: ShipIssue[] = [
+      { id: "1", title: "Late", state: "todo", due_date: daysAgo(3), display_id: "#42" },
+    ];
+    const findings = overdueIssueFindings(issues, NOW);
+    expect(findings[0].recommendation).toBeDefined();
+    expect(findings[0].recommendation).toContain("#42");
+    expect(findings[0].recommendation).toContain("3");
+  });
+
+  it("uses id when display_id is missing", () => {
+    const issues: ShipIssue[] = [
+      { id: "abc-123", title: "Late", state: "todo", due_date: daysAgo(1) },
+    ];
+    const findings = overdueIssueFindings(issues, NOW);
+    expect(findings[0].recommendation).toContain("abc-123");
   });
 });

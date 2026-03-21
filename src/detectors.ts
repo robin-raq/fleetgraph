@@ -100,6 +100,31 @@ export function missedStandupFindings(
     }));
 }
 
+export function overdueIssueFindings(issues: ShipIssue[], nowMs: number = Date.now()): Finding[] {
+  return issues
+    .filter((issue) => {
+      if (DONE_STATES.includes((issue.state ?? "").toLowerCase())) return false;
+      const due = toDate(issue.due_date ?? undefined);
+      if (!due) return false;
+      return due.getTime() < nowMs;
+    })
+    .slice(0, 10)
+    .map((issue) => {
+      const due = toDate(issue.due_date ?? undefined)!;
+      const daysOverdue = Math.floor((nowMs - due.getTime()) / (1000 * 60 * 60 * 24));
+      const label = issue.display_id ?? issue.id;
+      return {
+        id: `overdue-${issue.id}`,
+        category: "overdue_issue" as const,
+        severity: "critical" as const,
+        title: `Overdue: ${issue.title}`,
+        detail: `Issue ${label} is ${daysOverdue} day(s) past its due date of ${issue.due_date}.`,
+        entityIds: [issue.id],
+        recommendation: `Reassign or re-scope ${label}: it is ${daysOverdue} day(s) past due.`
+      };
+    });
+}
+
 export function computeSeverity(findings: Finding[]): Severity {
   if (findings.some((f) => f.severity === "critical")) return "critical";
   if (findings.some((f) => f.severity === "warning")) return "warning";
