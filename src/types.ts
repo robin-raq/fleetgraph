@@ -34,6 +34,14 @@ export interface FleetResult {
   approvalId?: string;
   tracePath: "clean_path" | "hitl_path" | "on_demand_path" | "error_path";
   chatResponse?: string;
+  _debug?: {
+    issueCount: number;
+    weekCount: number;
+    standupCount: number;
+    teamMemberCount: number;
+    dataChanged: boolean;
+    fetchError: boolean;
+  };
 }
 
 export interface ShipIssue {

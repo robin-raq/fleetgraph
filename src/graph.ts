@@ -281,6 +281,14 @@ export async function runFleetGraph(input: FleetRequestInput): Promise<FleetResu
     needsApproval: result.needsApproval,
     approvalId: result.approvalId,
     tracePath: result.tracePath,
-    chatResponse: result.chatResponse
+    chatResponse: result.chatResponse,
+    _debug: {
+      issueCount: result.issues.length,
+      weekCount: result.weeks.length,
+      standupCount: result.standups.length,
+      teamMemberCount: result.teamMembers.length,
+      dataChanged: result.dataChanged,
+      fetchError: result.fetchError
+    }
   };
 }
