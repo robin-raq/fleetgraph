@@ -126,6 +126,30 @@ export function overdueIssueFindings(issues: ShipIssue[], nowMs: number = Date.n
     });
 }
 
+export function scopeCreepFindings(weeks: ShipWeek[], issues: ShipIssue[]): Finding[] {
+  const activeWeek = weeks.find(isActiveWeek);
+  if (!activeWeek || !activeWeek.planned_issue_ids?.length) return [];
+
+  const plannedSet = new Set(activeWeek.planned_issue_ids);
+  const sprintIssues = issues.filter((issue) =>
+    issue.belongs_to?.some((b) => b.id === activeWeek.id && b.type === "sprint")
+  );
+  const added = sprintIssues.filter((issue) => !plannedSet.has(issue.id));
+
+  if (added.length <= 2) return [];
+
+  const titles = added.slice(0, 5).map((i) => i.title).join(", ");
+  return [{
+    id: `scope-creep-${activeWeek.id}`,
+    category: "scope_creep" as const,
+    severity: "warning" as const,
+    title: `Scope creep: ${added.length} unplanned issues in ${activeWeek.title ?? activeWeek.id}`,
+    detail: `${added.length} issues were added to ${activeWeek.title ?? activeWeek.id} after sprint planning (${plannedSet.size} originally planned).`,
+    entityIds: [activeWeek.id, ...added.map((i) => i.id)],
+    recommendation: `Consider deferring ${titles} to the next sprint to protect the sprint goal.`
+  }];
+}
+
 export function workDistributionFindings(issues: ShipIssue[], teamMembers: ShipTeamMember[]): Finding[] {
   if (teamMembers.length < 2) return [];
 

@@ -7,6 +7,7 @@ import {
   missedStandupFindings,
   overdueIssueFindings,
   workDistributionFindings,
+  scopeCreepFindings,
   computeSeverity
 } from "./detectors";
 import type { Finding, ShipIssue, ShipStandup, ShipWeek } from "./types";
@@ -473,5 +474,67 @@ describe("workDistributionFindings", () => {
     const issues = makeIssues({ alice: 9, bob: 1, charlie: 1 });
     const findings = workDistributionFindings(issues, team);
     expect(findings[0].recommendation).toContain("pt");
+  });
+});
+
+// ─────────────────────────────────────────────
+// Scope Creep Detector
+// ─────────────────────────────────────────────
+
+describe("scopeCreepFindings", () => {
+  const activeWeek: ShipWeek = {
+    id: "week-1",
+    title: "Sprint 15",
+    status: "active",
+    start_date: daysAgo(5),
+    end_date: daysFromNow(2),
+    planned_issue_ids: ["i-1", "i-2", "i-3"]
+  };
+
+  function sprintIssue(id: string, title: string): ShipIssue {
+    return {
+      id, title, state: "todo",
+      belongs_to: [{ id: "week-1", type: "sprint", title: "Sprint 15" }]
+    };
+  }
+
+  it("detects scope creep when >2 issues added after planning", () => {
+    const issues = [
+      sprintIssue("i-1", "Planned 1"), sprintIssue("i-2", "Planned 2"), sprintIssue("i-3", "Planned 3"),
+      sprintIssue("i-4", "Added 1"), sprintIssue("i-5", "Added 2"), sprintIssue("i-6", "Added 3"),
+    ];
+    const findings = scopeCreepFindings([activeWeek], issues);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].category).toBe("scope_creep");
+    expect(findings[0].severity).toBe("warning");
+    expect(findings[0].detail).toContain("3");
+  });
+
+  it("tolerates <= 2 extra issues (normal)", () => {
+    const issues = [
+      sprintIssue("i-1", "P1"), sprintIssue("i-2", "P2"), sprintIssue("i-3", "P3"),
+      sprintIssue("i-4", "Added 1"),
+    ];
+    expect(scopeCreepFindings([activeWeek], issues)).toHaveLength(0);
+  });
+
+  it("returns empty when no planned_issue_ids", () => {
+    const weekNoPlan: ShipWeek = { ...activeWeek, planned_issue_ids: undefined };
+    const issues = [sprintIssue("i-1", "P1"), sprintIssue("i-4", "Added")];
+    expect(scopeCreepFindings([weekNoPlan], issues)).toHaveLength(0);
+  });
+
+  it("returns empty when no active week", () => {
+    const completedWeek: ShipWeek = { ...activeWeek, status: "completed" };
+    expect(scopeCreepFindings([completedWeek], [])).toHaveLength(0);
+  });
+
+  it("recommendation lists added issue titles", () => {
+    const issues = [
+      sprintIssue("i-1", "P1"), sprintIssue("i-2", "P2"), sprintIssue("i-3", "P3"),
+      sprintIssue("i-4", "Bug fix"), sprintIssue("i-5", "Hotfix"), sprintIssue("i-6", "Extra"),
+    ];
+    const findings = scopeCreepFindings([activeWeek], issues);
+    expect(findings[0].recommendation).toContain("Bug fix");
   });
 });
