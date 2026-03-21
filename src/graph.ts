@@ -4,7 +4,7 @@ import { LangChainTracer } from "@langchain/core/tracers/tracer_langchain";
 import { config } from "./config";
 import { createApproval } from "./approvalStore";
 import { ShipClient } from "./shipClient";
-import { isActiveWeek, staleIssueFindings, sprintHealthFindings, unassignedHighPriorityFindings, missedStandupFindings, overdueIssueFindings, computeSeverity } from "./detectors";
+import { isActiveWeek, staleIssueFindings, sprintHealthFindings, unassignedHighPriorityFindings, missedStandupFindings, overdueIssueFindings, workDistributionFindings, computeSeverity } from "./detectors";
 import { hasDataChanged } from "./dataHash";
 import { resolveContext } from "./contextResolver";
 import type { ShipTeamMember } from "./shipClient";
@@ -136,6 +136,7 @@ const graph = new StateGraph(FleetState)
       ...sprintHealthFindings(state.weeks, state.issues),
       ...unassignedHighPriorityFindings(state.issues),
       ...overdueIssueFindings(state.issues),
+      ...workDistributionFindings(state.issues, state.teamMembers),
       ...(activeWeek
         ? missedStandupFindings(activeWeek, state.standups, state.teamMembers)
         : [])

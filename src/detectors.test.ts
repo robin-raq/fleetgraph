@@ -6,9 +6,11 @@ import {
   unassignedHighPriorityFindings,
   missedStandupFindings,
   overdueIssueFindings,
+  workDistributionFindings,
   computeSeverity
 } from "./detectors";
 import type { Finding, ShipIssue, ShipStandup, ShipWeek } from "./types";
+import type { ShipTeamMember } from "./shipClient";
 
 // Fixed "now" for deterministic tests: 2026-03-17T12:00:00Z
 const NOW = new Date("2026-03-17T12:00:00Z").getTime();
@@ -392,5 +394,84 @@ describe("overdueIssueFindings", () => {
     ];
     const findings = overdueIssueFindings(issues, NOW);
     expect(findings[0].recommendation).toContain("abc-123");
+  });
+});
+
+// ─────────────────────────────────────────────
+// Work Distribution Detector
+// ─────────────────────────────────────────────
+
+describe("workDistributionFindings", () => {
+  const team: ShipTeamMember[] = [
+    { id: "alice", name: "Alice" },
+    { id: "bob", name: "Bob" },
+    { id: "charlie", name: "Charlie" },
+  ];
+
+  function makeIssues(assigneeCounts: Record<string, number>): ShipIssue[] {
+    const issues: ShipIssue[] = [];
+    for (const [assignee_id, count] of Object.entries(assigneeCounts)) {
+      for (let i = 0; i < count; i++) {
+        issues.push({
+          id: `${assignee_id}-${i}`,
+          title: `Task ${i}`,
+          state: "todo",
+          assignee_id,
+          assignee_name: assignee_id.charAt(0).toUpperCase() + assignee_id.slice(1),
+          estimate: 3
+        });
+      }
+    }
+    return issues;
+  }
+
+  it("flags overloaded member when count > 2x mean and 3+ above mean", () => {
+    // Alice: 9, Bob: 2, Charlie: 1 → mean ~4, Alice is 9 (>2x4 and 5 above mean)
+    const issues = makeIssues({ alice: 9, bob: 2, charlie: 1 });
+    const findings = workDistributionFindings(issues, team);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].category).toBe("work_distribution");
+    expect(findings[0].severity).toBe("warning");
+    expect(findings[0].title).toContain("Alice");
+  });
+
+  it("does not flag balanced team", () => {
+    const issues = makeIssues({ alice: 3, bob: 3, charlie: 4 });
+    expect(workDistributionFindings(issues, team)).toHaveLength(0);
+  });
+
+  it("excludes done issues from count", () => {
+    const issues = [
+      ...makeIssues({ alice: 4, bob: 2, charlie: 1 }),
+      // Add 5 done issues for Alice — shouldn't count
+      ...Array.from({ length: 5 }, (_, i) => ({
+        id: `alice-done-${i}`, title: "Done", state: "done", assignee_id: "alice"
+      } as ShipIssue))
+    ];
+    expect(workDistributionFindings(issues, team)).toHaveLength(0);
+  });
+
+  it("returns empty with single team member", () => {
+    const issues = makeIssues({ alice: 10 });
+    expect(workDistributionFindings(issues, [team[0]])).toHaveLength(0);
+  });
+
+  it("returns empty when all issues are unassigned", () => {
+    const issues: ShipIssue[] = Array.from({ length: 5 }, (_, i) => ({
+      id: `u-${i}`, title: `Task ${i}`, state: "todo", assignee_id: null
+    }));
+    expect(workDistributionFindings(issues, team)).toHaveLength(0);
+  });
+
+  it("recommendation names the lightest member", () => {
+    const issues = makeIssues({ alice: 9, bob: 1, charlie: 2 });
+    const findings = workDistributionFindings(issues, team);
+    expect(findings[0].recommendation).toContain("Bob");
+  });
+
+  it("includes estimate totals in recommendation when available", () => {
+    const issues = makeIssues({ alice: 9, bob: 1, charlie: 1 });
+    const findings = workDistributionFindings(issues, team);
+    expect(findings[0].recommendation).toContain("pt");
   });
 });

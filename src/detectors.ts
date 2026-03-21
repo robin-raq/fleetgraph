@@ -1,3 +1,4 @@
+import type { ShipTeamMember } from "./shipClient";
 import type { Finding, Severity, ShipIssue, ShipStandup, ShipWeek } from "./types";
 
 const DONE_STATES = ["done", "cancelled"];
@@ -123,6 +124,41 @@ export function overdueIssueFindings(issues: ShipIssue[], nowMs: number = Date.n
         recommendation: `Reassign or re-scope ${label}: it is ${daysOverdue} day(s) past due.`
       };
     });
+}
+
+export function workDistributionFindings(issues: ShipIssue[], teamMembers: ShipTeamMember[]): Finding[] {
+  if (teamMembers.length < 2) return [];
+
+  const openIssues = issues.filter((i) => !DONE_STATES.includes((i.state ?? "").toLowerCase()) && i.assignee_id);
+  if (openIssues.length === 0) return [];
+
+  const workload = new Map<string, { count: number; estimate: number; name: string }>();
+  for (const member of teamMembers) {
+    workload.set(member.id, { count: 0, estimate: 0, name: member.name });
+  }
+  for (const issue of openIssues) {
+    const entry = workload.get(issue.assignee_id!);
+    if (entry) {
+      entry.count++;
+      entry.estimate += typeof issue.estimate === "number" ? issue.estimate : 0;
+    }
+  }
+
+  const entries = Array.from(workload.values());
+  const mean = entries.reduce((sum, e) => sum + e.count, 0) / entries.length;
+  const lightest = entries.reduce((min, e) => (e.count < min.count ? e : min), entries[0]);
+
+  return entries
+    .filter((e) => e.count > 2 * mean && e.count >= mean + 3)
+    .map((e) => ({
+      id: `work-dist-${e.name.toLowerCase().replace(/\s+/g, "-")}`,
+      category: "work_distribution" as const,
+      severity: "warning" as const,
+      title: `Overloaded: ${e.name} has ${e.count} open issues`,
+      detail: `${e.name} has ${e.count} open issues (~${e.estimate} pt) while the team average is ${mean.toFixed(1)}.`,
+      entityIds: [] as string[],
+      recommendation: `Consider reassigning issues from ${e.name} (${e.count} open, ~${e.estimate} pt) to ${lightest.name} (${lightest.count} open).`
+    }));
 }
 
 export function computeSeverity(findings: Finding[]): Severity {
