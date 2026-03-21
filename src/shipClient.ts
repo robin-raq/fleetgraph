@@ -1,4 +1,4 @@
-import type { ShipIssue, ShipStandup, ShipTarget, ShipWeek } from "./types";
+import type { BelongsTo, ShipIssue, ShipStandup, ShipTarget, ShipWeek } from "./types";
 import { config, resolveShipTarget } from "./config";
 
 export interface ShipTeamMember {
@@ -99,7 +99,19 @@ export class ShipClient {
       assignee_id: pickString(row, ["assignee_id", "assigneeId"]) ?? null,
       assignee_name: pickString(row, ["assignee_name", "assigneeName"]) ?? null,
       updated_at: pickString(row, ["updated_at", "updatedAt", "last_activity_at", "lastActivityAt"]),
-      created_at: pickString(row, ["created_at", "createdAt"])
+      created_at: pickString(row, ["created_at", "createdAt"]),
+      estimate: typeof row.estimate === "number" ? row.estimate : null,
+      due_date: pickString(row, ["due_date", "dueDate"]) ?? null,
+      started_at: pickString(row, ["started_at", "startedAt"]) ?? null,
+      completed_at: pickString(row, ["completed_at", "completedAt"]) ?? null,
+      display_id: pickString(row, ["display_id", "displayId"]) ?? null,
+      belongs_to: Array.isArray(row.belongs_to)
+        ? (row.belongs_to as Record<string, unknown>[]).map((b) => ({
+            id: String(b.id ?? ""),
+            type: String(b.type ?? ""),
+            title: typeof b.title === "string" ? b.title : undefined
+          } satisfies BelongsTo))
+        : undefined
     }), (issue) => !!issue.id);
   }
 
@@ -110,7 +122,15 @@ export class ShipClient {
       title: pickString(row, ["title", "name"]),
       start_date: pickString(row, ["start_date", "startDate"]),
       end_date: pickString(row, ["end_date", "endDate"]),
-      status: pickString(row, ["status", "state"])
+      status: pickString(row, ["status", "state"]),
+      issue_count: typeof row.issue_count === "number" ? row.issue_count : undefined,
+      completed_count: typeof row.completed_count === "number" ? row.completed_count : undefined,
+      started_count: typeof row.started_count === "number" ? row.started_count : undefined,
+      has_plan: typeof row.has_plan === "boolean" ? row.has_plan : undefined,
+      days_remaining: typeof row.days_remaining === "number" ? row.days_remaining : undefined,
+      planned_issue_ids: Array.isArray(row.planned_issue_ids)
+        ? (row.planned_issue_ids as unknown[]).filter((id): id is string => typeof id === "string")
+        : undefined
     }), (week) => !!week.id);
   }
 

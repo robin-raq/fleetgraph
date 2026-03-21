@@ -15,7 +15,15 @@ export interface FleetRequestInput {
   context?: RouteContext;
 }
 
-export type FindingCategory = "stale_issue" | "sprint_health" | "unassigned_high_priority" | "missed_standup";
+export type FindingCategory =
+  | "stale_issue"
+  | "sprint_health"
+  | "unassigned_high_priority"
+  | "missed_standup"
+  | "overdue_issue"
+  | "work_distribution"
+  | "scope_creep"
+  | "no_sprint_plan";
 
 export interface Finding {
   id: string;
@@ -24,6 +32,7 @@ export interface Finding {
   title: string;
   detail: string;
   entityIds: string[];
+  recommendation?: string;
 }
 
 export interface FleetResult {
@@ -44,6 +53,12 @@ export interface FleetResult {
   };
 }
 
+export interface BelongsTo {
+  id: string;
+  type: string;
+  title?: string;
+}
+
 export interface ShipIssue {
   id: string;
   title: string;
@@ -53,6 +68,12 @@ export interface ShipIssue {
   assignee_name?: string | null;
   updated_at?: string;
   created_at?: string;
+  estimate?: number | null;
+  due_date?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  display_id?: string | null;
+  belongs_to?: BelongsTo[];
 }
 
 export interface ShipStandup {
@@ -69,5 +90,11 @@ export interface ShipWeek {
   start_date?: string;
   end_date?: string;
   status?: string;
+  issue_count?: number;
+  completed_count?: number;
+  started_count?: number;
+  has_plan?: boolean;
+  days_remaining?: number;
+  planned_issue_ids?: string[];
 }
 
