@@ -8,6 +8,8 @@ import { z } from "zod";
 import { config } from "./config";
 import { runFleetGraph } from "./graph";
 import { listApprovals, updateApproval } from "./approvalStore";
+import { ShipClient } from "./shipClient";
+import { isActiveWeek } from "./detectors";
 import type { FleetMode } from "./types";
 
 export const app = express();
@@ -133,6 +135,50 @@ app.get("/api/approvals", (req, res) => {
   const parsed = approvalListQuerySchema.safeParse({ status: req.query.status });
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
   res.json({ approvals: listApprovals(parsed.data.status) });
+});
+
+// Diagnostic endpoint — tests each Ship API call individually
+app.get("/api/debug/ship", async (req, res) => {
+  const target = (req.query.target === "local" ? "local" : "prod") as "local" | "prod";
+  const results: Record<string, unknown> = {};
+
+  const client = ShipClient.for(target);
+
+  try {
+    const issues = await client.fetchIssues();
+    results.issues = { ok: true, count: issues.length };
+  } catch (e) {
+    results.issues = { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+
+  try {
+    const weeks = await client.fetchWeeks();
+    const activeWeek = weeks.find(isActiveWeek);
+    results.weeks = { ok: true, count: weeks.length, activeWeek: activeWeek ? { id: activeWeek.id, name: activeWeek.title, start: activeWeek.start_date, end: activeWeek.end_date } : null };
+
+    if (activeWeek) {
+      try {
+        const standups = await client.fetchStandups(activeWeek.id);
+        results.standups = { ok: true, count: standups.length };
+      } catch (e) {
+        results.standups = { ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    } else {
+      results.standups = { ok: true, skipped: "no active week", count: 0 };
+    }
+  } catch (e) {
+    results.weeks = { ok: false, error: e instanceof Error ? e.message : String(e) };
+    results.standups = { skipped: "weeks failed" };
+  }
+
+  try {
+    const team = await client.fetchTeamMembers();
+    results.teamMembers = { ok: true, count: team.length };
+  } catch (e) {
+    results.teamMembers = { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+
+  res.json({ target, results });
 });
 
 app.post("/api/approvals/:id", (req, res) => {
