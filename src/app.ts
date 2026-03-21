@@ -38,10 +38,8 @@ const llmLimiter = rateLimit({
   message: { error: "Too many requests — try again in a minute" }
 });
 
-// Serve static test harness only in non-production
-if (process.env.NODE_ENV !== "production") {
-  app.use(express.static(path.resolve(__dirname, "../public")));
-}
+// Serve static test harness in all environments (protected by API key middleware above if set)
+app.use(express.static(path.resolve(__dirname, "../public")));
 
 function sha256(value: string): Buffer {
   return createHash("sha256").update(value).digest();
@@ -98,9 +96,6 @@ app.get("/health", (_req, res) => {
 });
 
 app.get("/", (_req, res) => {
-  if (process.env.NODE_ENV === "production") {
-    return res.json({ service: "fleetgraph", docs: "/health" });
-  }
   res.redirect("/test.html");
 });
 
