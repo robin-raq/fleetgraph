@@ -2,37 +2,60 @@
 
 ## Agent Responsibility
 
-FleetGraph is a project intelligence agent for Ship that monitors project execution quality and surfaces actionable findings backed by evidence. It operates in two modes through a single graph architecture:
+FleetGraph is a project intelligence agent for Ship that monitors project execution quality and surfaces actionable findings backed by evidence. It operates in two modes through a single graph architecture.
 
-**Proactive mode (agent pushes):**
-- Monitors project state on a schedule (polling every 5 minutes during business hours)
-- Runs 8 detectors: stale issues (no activity 3+ days), sprint health risks, unassigned high-priority work, missed standups, overdue issues (past due_date), work distribution imbalances, sprint scope creep (unplanned additions), and missing sprint plans
-- Every finding includes a **specific recommended action** (e.g., "Reassign #27 to Bob who has 1 open issue") — not just a problem description
-- Surfaces findings to the team with specific entity references (issue IDs, sprint names, assignee names)
-- All findings pass through a human-in-the-loop approval gate before any downstream notification
+### What does this agent monitor proactively?
 
-**On-demand mode (user pulls):**
-- Invoked from within Ship's UI via an embedded chat interface
-- Context-aware: knows what page the user is viewing (issue, sprint, project, dashboard) and scopes its reasoning accordingly
-- Answers questions like "What should I focus on today?", "What's blocking this sprint?", or "Who's overloaded?"
-- Uses the same fetch → analyze → reason pipeline, but routes to a conversational response node instead of HITL gate
+FleetGraph polls Ship every 5 minutes during business hours (Mon-Fri, 8am-6pm) and runs 8 rule-based detectors against live project data:
+1. **Stale issues** — open issues with no activity for 3+ days (severity: warning)
+2. **Sprint health** — too many open issues with < 3 days remaining in active sprint (severity: warning)
+3. **Unassigned high-priority** — high/urgent/critical issues with no assignee (severity: critical)
+4. **Missed standups** — team members who haven't submitted a standup for the active sprint (severity: info)
+5. **Overdue issues** — issues past their explicit `due_date` (severity: critical)
+6. **Work distribution** — team member has >2x average open issues (severity: warning)
+7. **Sprint scope creep** — >2 unplanned issues added after sprint planning (severity: warning)
+8. **No sprint plan** — active sprint without a plan (severity: info)
 
-**Autonomous actions (no human needed):**
-- Fetching data from Ship REST API
-- Analyzing patterns and computing severity levels
-- Generating summaries and answering chat questions
-- Logging findings and creating approval records
+Every finding includes a **specific recommended action** (e.g., "Reassign #27 to Bob who has 1 open issue"). The dedicated **reasoning node** then analyzes relationships between findings, identifies root causes, and prioritizes actions before routing to the HITL approval gate.
 
-**Requires human approval before:**
+### What does it reason about when invoked on demand?
+
+When a user asks a question via the chat interface, the reasoning node receives the user's question along with all fetched Ship data and detector findings. It reasons about:
+- **The user's specific question** in the context of what they're currently viewing (issue, sprint, project, dashboard)
+- **Relationships** between data points (e.g., "Iris has 3 stale issues AND missed her standup — she may be blocked or overwhelmed")
+- **Compound risk** across finding categories (e.g., scope creep + sprint health risk = systemic planning problem)
+- **Prioritized recommendations** — what the user should do first and why
+- **Non-obvious patterns** the rule-based detectors may have missed (e.g., all stale issues belong to one project)
+
+### What can it do autonomously?
+
+- Fetch data from Ship REST API (issues, weeks, standups, team members)
+- Run 8 rule-based detectors and compute severity
+- Reason about relationships between findings (via LLM)
+- Generate actionable summaries and answer chat questions
+- Create approval records in the HITL queue
+- Skip unnecessary LLM calls when data hasn't changed (diff-based polling)
+
+### What must it always ask a human about before acting?
+
+The agent **never acts on its own** for consequential actions. It requires human approval before:
 - Notifying team members about detected problems
 - Reassigning work or changing sprint scope
 - Escalating issues to leadership
 - Any action that modifies Ship data or sends communications
 
-**How on-demand mode uses context:**
+### Who does it notify, and under what conditions?
+- FleetGraph does **not** send notifications autonomously. When the proactive scan detects findings (severity > clean), it creates a pending **approval record** in the HITL queue. A human (PM, lead, or director) reviews the approval via `GET /api/approvals` and decides to approve or reject via `POST /api/approvals/:id`. Only after human approval would a downstream notification system (not yet implemented in MVP) send messages to the affected team members. The agent surfaces the findings and recommends who to contact — the human decides whether and how to act.
+
+### How does it know who is on a project and what their role is?
+- FleetGraph calls `GET /api/team/people` from Ship's REST API, which returns all workspace members with their `id`, `name`, `email`, `role`, and `reportsTo` (manager ID). This gives the agent the full team roster for detectors like missed standups (compare standup submissions against team list) and work distribution (count open issues per assignee across the team). The `reportsTo` field enables future escalation logic (e.g., notify a manager when their report is overloaded). Currently, the agent treats all team members equally — role-based reasoning (e.g., weighting findings differently for ICs vs leads) is a planned enhancement.
+
+### How does the on-demand mode use context from the current view?
 - The `context` object carries `pathname`, `entityType`, and `entityId` from the user's current Ship view
-- This context is injected into the LLM system prompt so the agent knows what the user is looking at
-- Example: a user on `/projects/abc/sprints/123` triggers context `{entityType: "sprint", entityId: "123"}` — the agent focuses its answer on that sprint
+- The `context` node (first in the graph) resolves this into a `viewDescription` string (e.g., "The user is currently viewing: issue #27 (path: /issues/b9921f8d)")
+- This description is injected into the reasoning node's LLM system prompt so the agent scopes its analysis to what the user is looking at
+- Example: a user on `/projects/abc/sprints/123` triggers context `{entityType: "sprint", entityId: "123"}` — the reasoning node focuses on that sprint's health, scope, and team performance rather than giving a generic project overview
+- A user on `/issues/b9921f8d` gets issue-specific analysis — status, assignee workload, staleness, related findings
 
 ---
 
