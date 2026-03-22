@@ -4,11 +4,23 @@ import { LangChainTracer } from "@langchain/core/tracers/tracer_langchain";
 import { config } from "./config";
 import { createApproval } from "./approvalStore";
 import { ShipClient } from "./shipClient";
-import { isActiveWeek, staleIssueFindings, sprintHealthFindings, unassignedHighPriorityFindings, missedStandupFindings, overdueIssueFindings, workDistributionFindings, scopeCreepFindings, noSprintPlanFindings, computeSeverity } from "./detectors";
+import {
+  isActiveWeek,
+  staleIssueFindings,
+  sprintHealthFindings,
+  unassignedHighPriorityFindings,
+  missedStandupFindings,
+  overdueIssueFindings,
+  workDistributionFindings,
+  scopeCreepFindings,
+  noSprintPlanFindings,
+  computeSeverity,
+  DETECTOR_RULES
+} from "./detectors";
 import { hasDataChanged } from "./dataHash";
 import { resolveContext } from "./contextResolver";
 import type { ShipTeamMember } from "./shipClient";
-import type { Finding, FleetRequestInput, FleetResult, Severity, ShipIssue, ShipStandup, ShipWeek } from "./types";
+import type { Finding, FleetRequestInput, FleetResult, Severity, ShipIssue, ShipStandup, ShipWeek, VerificationSnapshot } from "./types";
 
 const FleetState = Annotation.Root({
   input: Annotation<FleetRequestInput>(),
@@ -148,8 +160,12 @@ const graph = new StateGraph(FleetState)
         : [])
     ];
     const severity = computeSeverity(findings);
+    const withRules: Finding[] = findings.map((f) => ({
+      ...f,
+      detectionRule: DETECTOR_RULES[f.category]
+    }));
     return {
-      findings,
+      findings: withRules,
       severity,
       needsApproval: findings.length > 0
     };
@@ -288,7 +304,79 @@ ${findingList}`
 
 const compiled = graph.compile();
 
+/** LangSmith run name — filter by this in project FleetGraph-MVP */
+export function buildLangSmithRunName(input: FleetRequestInput): string {
+  const ctx = input.context;
+  if (ctx?.entityType && ctx?.entityId) {
+    return `FleetGraph-${input.mode}-ctx-${ctx.entityType}-${ctx.entityId}`;
+  }
+  if (ctx?.pathname) {
+    const safe = ctx.pathname.replace(/\//g, "_").replace(/^_/, "") || "root";
+    return `FleetGraph-${input.mode}-path-${safe}`;
+  }
+  return `FleetGraph-${input.mode}-no-ctx`;
+}
+
+/**
+ * Ordered node names for this run (for API `verification.graphSteps`).
+ * Mirrors conditional edges in this file — keep in sync when graph changes.
+ */
+export function computeGraphSteps(
+  input: FleetRequestInput,
+  state: {
+    fetchError?: boolean;
+    dataChanged?: boolean;
+    findings: Finding[];
+    tracePath: FleetResult["tracePath"];
+  }
+): string[] {
+  if (state.fetchError) {
+    return ["context", "fetch", "errorFallback"];
+  }
+  if (input.mode === "proactive" && !state.dataChanged) {
+    return ["context", "fetch", "analyze", "cleanPath"];
+  }
+  if (input.mode === "proactive" && state.findings.length === 0) {
+    return ["context", "fetch", "analyze", "cleanPath"];
+  }
+  const base = ["context", "fetch", "analyze", "reason"] as const;
+  if (input.mode === "on_demand") {
+    return [...base, "respondToUser"];
+  }
+  return state.findings.length > 0 ? [...base, "hitlPath"] : [...base, "cleanPath"];
+}
+
+function buildVerification(
+  input: FleetRequestInput,
+  result: {
+    fetchError?: boolean;
+    dataChanged: boolean;
+    findings: Finding[];
+    tracePath: FleetResult["tracePath"];
+  }
+): VerificationSnapshot {
+  const resolved = resolveContext(input);
+  const graphSteps = computeGraphSteps(input, {
+    fetchError: result.fetchError,
+    dataChanged: result.dataChanged,
+    findings: result.findings,
+    tracePath: result.tracePath
+  });
+  const runName = buildLangSmithRunName(input);
+  return {
+    context: {
+      pathname: resolved.pathname,
+      entityType: resolved.entityType,
+      entityId: resolved.entityId,
+      viewDescription: resolved.viewDescription
+    },
+    graphSteps,
+    langSmithHint: `LangSmith → project "FleetGraph-MVP" → search runs named "${runName}" (tags: mode:${input.mode}, tracePath:${result.tracePath})`
+  };
+}
+
 export async function runFleetGraph(input: FleetRequestInput): Promise<FleetResult> {
+  const runName = buildLangSmithRunName(input);
   const result = await compiled.invoke(
     {
       input,
@@ -310,8 +398,20 @@ export async function runFleetGraph(input: FleetRequestInput): Promise<FleetResu
       reasoning: ""
     },
     {
-      runName: `FleetGraph-${input.mode}`,
-      metadata: { mode: input.mode, target: input.target },
+      runName,
+      tags: [
+        "fleetgraph",
+        `mode:${input.mode}`,
+        `target:${input.target}`,
+        input.context?.entityType ? `ctx:${input.context.entityType}` : "ctx:none"
+      ],
+      metadata: {
+        mode: input.mode,
+        target: input.target,
+        entityType: input.context?.entityType ?? null,
+        entityId: input.context?.entityId ?? null,
+        pathname: input.context?.pathname ?? null
+      },
       callbacks: [getTracer()]
     }
   );
@@ -324,6 +424,7 @@ export async function runFleetGraph(input: FleetRequestInput): Promise<FleetResu
     approvalId: result.approvalId,
     tracePath: result.tracePath,
     chatResponse: result.chatResponse,
+    verification: buildVerification(input, result),
     _debug: {
       issueCount: result._issueCount,
       weekCount: result._weekCount,

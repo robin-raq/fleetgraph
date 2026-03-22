@@ -107,6 +107,18 @@
       detail.textContent = f.detail;
       div.appendChild(title);
       div.appendChild(detail);
+      if (f.detectionRule) {
+        var rule = document.createElement('div');
+        rule.style.cssText = 'font-size:0.7rem;color:#58a6ff;margin-top:4px;font-style:italic;';
+        rule.textContent = 'Rule: ' + f.detectionRule;
+        div.appendChild(rule);
+      }
+      if (f.recommendation) {
+        var rec = document.createElement('div');
+        rec.style.cssText = 'font-size:0.75rem;color:#3fb950;margin-top:4px;';
+        rec.textContent = '→ ' + f.recommendation;
+        div.appendChild(rec);
+      }
       return div;
     }
 
@@ -208,6 +220,18 @@
         header.appendChild(document.createTextNode(data.tracePath + ' '));
         header.appendChild(createBadge(data.severity));
         out.appendChild(header);
+
+        if (data.verification) {
+          var v = data.verification;
+          var ctxLine = document.createElement('div');
+          ctxLine.style.cssText = 'font-size:0.75rem;color:#8b949e;margin-top:6px;';
+          ctxLine.textContent = 'Context scope: ' + (v.context.viewDescription || '(none — add context in request)');
+          out.appendChild(ctxLine);
+          var stepsLine = document.createElement('div');
+          stepsLine.style.cssText = 'font-size:0.75rem;color:#8b949e;';
+          stepsLine.textContent = 'Graph steps: ' + (v.graphSteps ? v.graphSteps.join(' → ') : '—');
+          out.appendChild(stepsLine);
+        }
 
         const responseHeader = document.createElement('strong');
         responseHeader.textContent = '\nResponse:';

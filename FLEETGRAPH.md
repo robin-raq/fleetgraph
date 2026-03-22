@@ -1,5 +1,7 @@
 # FLEETGRAPH.md
 
+**Reviewer quick path:** See **[VERIFICATION.md](./VERIFICATION.md)** for detector ↔ test ↔ LangSmith trace mapping, and use the **`verification`** object on every API response (`context`, `graphSteps`, `langSmithHint`) to confirm on-demand scoping and graph path.
+
 ## Agent Responsibility
 
 FleetGraph is a project intelligence agent for Ship that monitors project execution quality and surfaces actionable findings backed by evidence. It operates in two modes through a single graph architecture.

@@ -1,7 +1,28 @@
 import type { ShipTeamMember } from "./shipClient";
-import type { Finding, Severity, ShipIssue, ShipStandup, ShipWeek } from "./types";
+import type { Finding, FindingCategory, Severity, ShipIssue, ShipStandup, ShipWeek } from "./types";
 
 const DONE_STATES = ["done", "cancelled"];
+
+/** One-line explanation of each detector for API responses and reviewer verification docs */
+export const DETECTOR_RULES: Record<FindingCategory, string> = {
+  stale_issue:
+    "Non-done issue with no activity for ≥3 days (or missing timestamps — treated as unknown/stale).",
+  sprint_health:
+    "Active sprint with ≥8 open issues and ≤3 calendar days until sprint end date.",
+  unassigned_high_priority:
+    "Priority is high/urgent/critical, issue is not done/cancelled, and assignee is empty.",
+  missed_standup:
+    "Team member listed in roster has no standup submission for the active sprint week.",
+  overdue_issue:
+    "Non-done issue with a due_date in the past.",
+  work_distribution:
+    "Assignee open-issue count exceeds 2× team mean and is at least mean+3 (team size ≥2).",
+  scope_creep:
+    "Active sprint with a plan: more than 2 issues in sprint were not in planned_issue_ids.",
+  no_sprint_plan:
+    "Active sprint has has_plan === false."
+};
+
 const HIGH_PRIORITIES = ["high", "urgent", "critical"];
 
 export function isActiveWeek(week: ShipWeek): boolean {

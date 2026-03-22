@@ -139,6 +139,23 @@ describe("server", () => {
       );
     });
 
+    it("POST /api/chat returns verification when graph includes it", async () => {
+      mockedRunFleetGraph.mockResolvedValue({
+        ...mockResult,
+        verification: {
+          context: { viewDescription: "test", pathname: "/x" },
+          graphSteps: ["context", "fetch", "analyze", "reason", "respondToUser"],
+          langSmithHint: "LangSmith → ..."
+        }
+      });
+      const res = await request(app)
+        .post("/api/chat")
+        .send({ target: "prod", message: "hello", context: { pathname: "/issues/1", entityType: "issue", entityId: "1" } });
+      expect(res.status).toBe(200);
+      expect(res.body.verification).toBeDefined();
+      expect(res.body.verification.graphSteps).toContain("respondToUser");
+    });
+
     it("POST /api/proactive/run calls runFleetGraph with proactive mode", async () => {
       await request(app).post("/api/proactive/run").send({ target: "prod" });
       expect(mockedRunFleetGraph).toHaveBeenCalledWith({ mode: "proactive", target: "prod" });

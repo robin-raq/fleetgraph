@@ -33,6 +33,23 @@ export interface Finding {
   detail: string;
   entityIds: string[];
   recommendation?: string;
+  /** Human-readable rule: why this detector fired (for reviewers / verification) */
+  detectionRule?: string;
+}
+
+/** Echoes request context + graph path so reviewers can verify on-demand scoping and routing */
+export interface VerificationSnapshot {
+  context: {
+    pathname?: string;
+    entityType?: string;
+    entityId?: string;
+    /** Same string injected into the LLM (from `resolveContext`) */
+    viewDescription: string;
+  };
+  /** Ordered LangGraph node names for this run */
+  graphSteps: string[];
+  /** How to find this run in LangSmith (project FleetGraph-MVP) */
+  langSmithHint: string;
 }
 
 export interface FleetResult {
@@ -43,6 +60,7 @@ export interface FleetResult {
   approvalId?: string;
   tracePath: "clean_path" | "hitl_path" | "on_demand_path" | "error_path";
   chatResponse?: string;
+  verification?: VerificationSnapshot;
   _debug?: {
     issueCount: number;
     weekCount: number;

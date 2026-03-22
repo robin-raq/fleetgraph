@@ -1,93 +1,103 @@
 /**
- * Generate LangSmith traces for all 6 FLEETGRAPH.md use cases.
+ * Generate LangSmith traces for FLEETGRAPH.md test cases.
+ * Produces 4 distinct traces showing all 4 graph execution paths:
+ *   1. Proactive → hitl_path (findings detected, HITL approval created)
+ *   2. Proactive → clean_path (data unchanged, LLM skipped)
+ *   3. On-demand → on_demand_path (user question with page context)
+ *   4. On-demand → on_demand_path (different context, different question)
+ *
  * Run with: npx tsx scripts/generate-traces.ts
  */
 import { runFleetGraph } from "../src/graph";
 import type { FleetRequestInput } from "../src/types";
 
-const useCases: { name: string; input: FleetRequestInput }[] = [
+interface TraceRun {
+  name: string;
+  description: string;
+  input: FleetRequestInput;
+}
+
+const runs: TraceRun[] = [
   {
-    name: "UC1: Stale issues (proactive)",
-    input: { mode: "proactive", target: "prod" }
+    name: "Trace 1: Proactive scan → hitl_path",
+    description: "First proactive scan against prod. All 8 detectors run. Findings trigger reasoning node + HITL approval.",
+    input: { mode: "proactive", target: "prod" },
   },
   {
-    name: "UC2: Sprint health risk (proactive)",
-    input: { mode: "proactive", target: "prod" }
-    // Same proactive scan — sprint health detector runs alongside stale issues
+    name: "Trace 2: Proactive scan → clean_path (diff skip)",
+    description: "Second proactive scan — data unchanged since Trace 1. Graph skips LLM, routes to clean_path.",
+    input: { mode: "proactive", target: "prod" },
   },
   {
-    name: "UC3: What should I focus on today? (on-demand, dashboard)",
+    name: "Trace 3: On-demand chat → on_demand_path (dashboard context)",
+    description: "User asks 'What should I focus on today?' from dashboard. Context node resolves dashboard view.",
     input: {
       mode: "on_demand",
       target: "prod",
       message: "What should I focus on today?",
-      context: { pathname: "/dashboard", entityType: "project" as const }
-    }
+      context: { pathname: "/dashboard", entityType: "unknown" },
+    },
   },
   {
-    name: "UC4: Project health summary (on-demand, project view)",
+    name: "Trace 4: On-demand chat → on_demand_path (team context)",
+    description: "User asks 'Who is overloaded this week?' from team view. Context scoped to team.",
     input: {
       mode: "on_demand",
       target: "prod",
-      message: "Give me a project health summary — open issues, sprint progress, and any risks you see.",
-      context: { pathname: "/projects", entityType: "project" as const }
-    }
+      message: "Who is overloaded this week and what should we do about it?",
+      context: { pathname: "/team/allocation", entityType: "unknown" },
+    },
   },
-  {
-    name: "UC5: Unassigned high-priority (proactive)",
-    input: { mode: "proactive", target: "prod" }
-    // Same proactive scan — unassigned high-priority detector runs
-  },
-  {
-    name: "UC6: Missed standups (proactive)",
-    input: { mode: "proactive", target: "prod" }
-    // Same proactive scan — missed standup detector runs
-  }
 ];
 
 async function main() {
-  // Proactive use cases (1, 2, 5, 6) all run in the same graph — run once and reuse
-  console.log("\n=== Running proactive scan (covers UC1, UC2, UC5, UC6) ===\n");
-  const proactiveResult = await runFleetGraph(useCases[0].input);
-  console.log("Trace path:", proactiveResult.tracePath);
-  console.log("Severity:", proactiveResult.severity);
-  console.log("Findings:", proactiveResult.findings.length);
+  console.log("Generating LangSmith traces for FleetGraph-MVP...\n");
 
-  // Break down findings by category
-  const byCategory = new Map<string, number>();
-  for (const f of proactiveResult.findings) {
-    byCategory.set(f.category, (byCategory.get(f.category) ?? 0) + 1);
+  for (const run of runs) {
+    console.log(`=== ${run.name} ===`);
+    console.log(`    ${run.description}\n`);
+
+    try {
+      const result = await runFleetGraph(run.input);
+
+      console.log(`  Trace path:     ${result.tracePath}`);
+      console.log(`  Severity:       ${result.severity}`);
+      console.log(`  Findings:       ${result.findings.length}`);
+      console.log(`  Needs approval: ${result.needsApproval}`);
+      if (result.approvalId) console.log(`  Approval ID:    ${result.approvalId}`);
+
+      if (result.findings.length > 0) {
+        const byCategory = new Map<string, number>();
+        for (const f of result.findings) {
+          byCategory.set(f.category, (byCategory.get(f.category) ?? 0) + 1);
+        }
+        console.log("  Findings by detector:");
+        for (const [cat, count] of byCategory) {
+          console.log(`    ${cat}: ${count}`);
+        }
+      }
+
+      if (result.chatResponse) {
+        console.log(`  Response:       ${result.chatResponse.slice(0, 200)}...`);
+      } else if (result.summary) {
+        console.log(`  Summary:        ${result.summary.slice(0, 200)}...`);
+      }
+
+      // Debug info
+      if (result._debug) {
+        console.log(`  Data: ${result._debug.issueCount} issues, ${result._debug.weekCount} weeks, ${result._debug.standupCount} standups, ${result._debug.teamMemberCount} team`);
+        console.log(`  Data changed: ${result._debug.dataChanged}`);
+      }
+    } catch (error) {
+      console.error(`  ERROR: ${error instanceof Error ? error.message : error}`);
+    }
+
+    console.log();
   }
-  console.log("\nFindings by category:");
-  for (const [cat, count] of byCategory) {
-    console.log(`  ${cat}: ${count}`);
-  }
-  console.log("Summary:", proactiveResult.summary?.slice(0, 200));
-  console.log("Needs approval:", proactiveResult.needsApproval);
-  if (proactiveResult.approvalId) console.log("Approval ID:", proactiveResult.approvalId);
 
-  // Run a second proactive to test diff-based polling (should show dataChanged: false behavior)
-  console.log("\n=== Running second proactive scan (diff-based skip test) ===\n");
-  const proactive2 = await runFleetGraph(useCases[0].input);
-  console.log("Trace path:", proactive2.tracePath);
-  console.log("Severity:", proactive2.severity);
-  console.log("Findings:", proactive2.findings.length);
-
-  // On-demand: UC3 — "What should I focus on today?"
-  console.log("\n=== UC3: What should I focus on today? ===\n");
-  const uc3 = await runFleetGraph(useCases[2].input);
-  console.log("Trace path:", uc3.tracePath);
-  console.log("Chat response:", uc3.chatResponse?.slice(0, 300));
-
-  // On-demand: UC4 — Project health summary
-  console.log("\n=== UC4: Project health summary ===\n");
-  const uc4 = await runFleetGraph(useCases[3].input);
-  console.log("Trace path:", uc4.tracePath);
-  console.log("Chat response:", uc4.chatResponse?.slice(0, 300));
-
-  console.log("\n=== Done — check LangSmith for traces ===");
-  console.log("Project: FleetGraph-MVP");
-  console.log("Total runs: 4 (1 proactive + 1 proactive repeat + 2 on-demand)");
+  console.log("=== Done ===");
+  console.log("Check LangSmith: https://smith.langchain.com → Project: FleetGraph-MVP");
+  console.log("Share each trace via the 'Share' button → copy public link → paste into FLEETGRAPH.md");
 }
 
 main().catch(console.error);

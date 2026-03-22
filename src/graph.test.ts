@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { staleIssueFindings, sprintHealthFindings, computeSeverity } from "./detectors";
 import { resolveContext } from "./contextResolver";
+import { computeGraphSteps, buildLangSmithRunName } from "./graph";
 import type { ShipIssue, ShipWeek, FleetRequestInput, RouteContext } from "./types";
 
 // Fixed "now" for deterministic tests: 2026-03-17T12:00:00Z
@@ -260,5 +261,76 @@ describe("Error fallback routing", () => {
 
   it("routes to analyze when fetch succeeds in on-demand mode", () => {
     expect(decidePostFetch(false, "on_demand")).toBe("analyze");
+  });
+});
+
+// ─── Reviewer verification: graph steps + LangSmith run names ─────────
+describe("computeGraphSteps", () => {
+  it("on_demand success: context → fetch → analyze → reason → respondToUser", () => {
+    const input: FleetRequestInput = { mode: "on_demand", target: "prod", message: "Hi" };
+    const steps = computeGraphSteps(input, {
+      fetchError: false,
+      dataChanged: true,
+      findings: [{ id: "1", category: "stale_issue", severity: "warning", title: "", detail: "", entityIds: [] }],
+      tracePath: "on_demand_path"
+    });
+    expect(steps).toEqual(["context", "fetch", "analyze", "reason", "respondToUser"]);
+  });
+
+  it("proactive with findings: context → fetch → analyze → reason → hitlPath", () => {
+    const input: FleetRequestInput = { mode: "proactive", target: "prod" };
+    const steps = computeGraphSteps(input, {
+      fetchError: false,
+      dataChanged: true,
+      findings: [{ id: "1", category: "stale_issue", severity: "warning", title: "", detail: "", entityIds: [] }],
+      tracePath: "hitl_path"
+    });
+    expect(steps).toEqual(["context", "fetch", "analyze", "reason", "hitlPath"]);
+  });
+
+  it("proactive unchanged data: skips reason (cleanPath)", () => {
+    const input: FleetRequestInput = { mode: "proactive", target: "prod" };
+    const steps = computeGraphSteps(input, {
+      fetchError: false,
+      dataChanged: false,
+      findings: [{ id: "1", category: "stale_issue", severity: "warning", title: "", detail: "", entityIds: [] }],
+      tracePath: "clean_path"
+    });
+    expect(steps).toEqual(["context", "fetch", "analyze", "cleanPath"]);
+  });
+
+  it("fetch error: context → fetch → errorFallback", () => {
+    const input: FleetRequestInput = { mode: "on_demand", target: "prod" };
+    const steps = computeGraphSteps(input, {
+      fetchError: true,
+      dataChanged: true,
+      findings: [],
+      tracePath: "error_path"
+    });
+    expect(steps).toEqual(["context", "fetch", "errorFallback"]);
+  });
+});
+
+describe("buildLangSmithRunName", () => {
+  it("includes entity when context has entityType + entityId", () => {
+    const name = buildLangSmithRunName({
+      mode: "on_demand",
+      target: "prod",
+      context: { entityType: "issue", entityId: "abc-123", pathname: "/issues/abc-123" }
+    });
+    expect(name).toBe("FleetGraph-on_demand-ctx-issue-abc-123");
+  });
+
+  it("uses pathname slug when no entity id", () => {
+    const name = buildLangSmithRunName({
+      mode: "on_demand",
+      target: "prod",
+      context: { pathname: "/sprints/5" }
+    });
+    expect(name).toBe("FleetGraph-on_demand-path-sprints_5");
+  });
+
+  it("marks no context", () => {
+    expect(buildLangSmithRunName({ mode: "proactive", target: "prod" })).toBe("FleetGraph-proactive-no-ctx");
   });
 });

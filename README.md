@@ -95,13 +95,11 @@ curl -X POST https://fleetgraph-production-89ba.up.railway.app/api/chat \
 ## Testing
 
 ```bash
-npm test          # run all 26 tests
+npm test           # full suite (detectors, graph, server, etc.)
 npm run test:watch # watch mode
 ```
 
-Tests cover:
-- **Detectors** (20 tests) — stale issue detection, sprint health, severity computation, edge cases
-- **Approval store** (6 tests) — create, list, filter, approve, reject
+See **[VERIFICATION.md](./VERIFICATION.md)** for how reviewers verify detectors, graph paths, and LangSmith traces. API responses include a **`verification`** field (`context`, `graphSteps`, `langSmithHint`) plus **`findings[].detectionRule`** and **`recommendation`** on each finding.
 
 ## Project Structure
 
@@ -125,6 +123,7 @@ public/
 | File | Purpose |
 |------|---------|
 | [FLEETGRAPH.md](./FLEETGRAPH.md) | Agent responsibility, use cases, graph diagram, trigger model, test cases, architecture decisions, cost analysis |
+| [VERIFICATION.md](./VERIFICATION.md) | Detector matrix, test file mapping, LangSmith verification, API fields for reviewers |
 | [PRESEARCH.md](./PRESEARCH.md) | Pre-search checklist — design decisions made before writing code |
 
 ## License
