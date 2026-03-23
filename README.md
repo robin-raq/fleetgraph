@@ -3,7 +3,23 @@
 A Project Intelligence Agent for [Ship](https://ship-app-production.up.railway.app) — monitors project health proactively, answers questions on demand, and always waits for human approval before acting.
 
 **Live:** https://fleetgraph-production-89ba.up.railway.app/test.html
-**Traces:** [Proactive hitl_path (19 findings)](https://smith.langchain.com/public/bd9f2eca-21f8-4747-9ff4-e5d9d0b3ef37/r) · [On-demand focus](https://smith.langchain.com/public/20f2a2b9-d36f-411e-9986-d7b5c978ba41/r) · [Diff-based skip](https://smith.langchain.com/public/9e3cee7f-bc09-4889-89f7-0184bc025dc1/r)
+**Ship app (with embedded FleetGraph):** https://ship-app-production.up.railway.app/login
+**Traces:** [Proactive hitl_path (25 findings)](https://smith.langchain.com/public/acf00811-6b45-4d62-92d0-19f73b5a3f7b/r) · [On-demand focus](https://smith.langchain.com/public/a9e989d4-7192-48c6-8f36-647938df69fa/r) · [On-demand team](https://smith.langchain.com/public/bf50121e-a6c6-4ebb-bbc8-5fa747ddd94a/r) · [Diff-based skip](https://smith.langchain.com/public/3dfbafa7-f130-46ca-972c-34eee8fb678c/r)
+
+## Ship Login Credentials
+
+FleetGraph is embedded inside Ship's sidebar. Log in to Ship to use it:
+
+| Role | Email | Password | Access |
+|------|-------|----------|--------|
+| **Admin (super-admin)** | `dev@ship.local` | `admin123` | Full access, workspace management, all features |
+| Alice Chen | `alice.chen@ship.local` | `admin123` | Team member |
+| Bob Martinez | `bob.martinez@ship.local` | `admin123` | Team member |
+| Carol Williams | `carol.williams@ship.local` | `admin123` | Team member |
+| David Kim | `david.kim@ship.local` | `admin123` | Team member |
+| + 6 more team members | `{first}.{last}@ship.local` | `admin123` | Team member |
+
+After logging in, click the **lightning bolt icon** in the bottom-left sidebar to open FleetGraph.
 
 ---
 
@@ -19,17 +35,22 @@ Ship shows you what's happening. FleetGraph tells you what's wrong.
 
 ```mermaid
 graph TD
-    START(("__start__")) --> fetch["fetch\n(Ship API: issues + weeks)"]
-    fetch --> analyze["analyze\n(stale issues + sprint health)"]
-    analyze -->|"proactive\nfindings > 0"| hitlPath["hitlPath\n(summarize + approval)"]
-    analyze -->|"proactive\nfindings = 0"| cleanPath["cleanPath\n(all clear)"]
-    analyze -->|"on_demand"| respondToUser["respondToUser\n(answer user question)"]
+    START(("__start__")) --> context["context\n(resolve who/what/where)"]
+    context --> fetch["fetch\n(Ship API: issues + weeks +\nteam + standups in parallel)"]
+    fetch -->|"fetch failed"| errorFallback["errorFallback"]
+    fetch -->|"fetch succeeded"| analyze["analyze\n(8 rule-based detectors)"]
+    analyze -->|"proactive + no change"| cleanPath["cleanPath\n(skip LLM, $0)"]
+    analyze -->|"findings > 0 OR on_demand"| reason["reason\n(GPT-4o-mini)"]
+    reason -->|"proactive"| hitlPath["hitlPath\n(create approval)"]
+    reason -->|"on_demand"| respondToUser["respondToUser"]
     hitlPath --> END(("__end__"))
     cleanPath --> END
     respondToUser --> END
+    errorFallback --> END
 ```
 
 **Stack:** LangGraph (TypeScript) · OpenAI GPT-4o-mini · LangSmith tracing · Express · Railway
+**8 detectors:** stale issues, sprint health, unassigned high-priority, missed standups, overdue issues, work distribution, scope creep, no sprint plan
 
 ## Quick Start
 
