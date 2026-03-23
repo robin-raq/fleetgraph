@@ -53,11 +53,34 @@ The agent **never acts on its own** for consequential actions. It requires human
 - FleetGraph calls `GET /api/team/people` from Ship's REST API, which returns all workspace members with their `id`, `name`, `email`, `role`, and `reportsTo` (manager ID). This gives the agent the full team roster for detectors like missed standups (compare standup submissions against team list) and work distribution (count open issues per assignee across the team). The `reportsTo` field enables future escalation logic (e.g., notify a manager when their report is overloaded). Currently, the agent treats all team members equally — role-based reasoning (e.g., weighting findings differently for ICs vs leads) is a planned enhancement.
 
 ### How does the on-demand mode use context from the current view?
-- The `context` object carries `pathname`, `entityType`, and `entityId` from the user's current Ship view
-- The `context` node (first in the graph) resolves this into a `viewDescription` string (e.g., "The user is currently viewing: issue #27 (path: /issues/b9921f8d)")
-- This description is injected into the reasoning node's LLM system prompt so the agent scopes its analysis to what the user is looking at
-- Example: a user on `/projects/abc/sprints/123` triggers context `{entityType: "sprint", entityId: "123"}` — the reasoning node focuses on that sprint's health, scope, and team performance rather than giving a generic project overview
-- A user on `/issues/b9921f8d` gets issue-specific analysis — status, assignee workload, staleness, related findings
+
+The embedded chat panel in Ship sends a rich `context` object built from three sources:
+
+**1. Route context** (parsed from URL):
+- `pathname` — the current page URL (e.g., `/issues/b9921f8d`)
+- `entityType` — resolved entity: `issue`, `project`, `program`, `sprint`, `document`, or `unknown`
+- `entityId` — the entity's ID extracted from the URL
+
+**2. User identity** (from Ship's `useAuth()` React hook):
+- `userId` — the logged-in user's ID
+- `userName` — the user's display name (e.g., "Dev User")
+- `userEmail` — the user's email
+
+**3. Document state** (from Ship's `useCurrentDocument()` React context):
+- `documentType` — the document type from Ship's unified model (`issue`, `wiki`, `project`, `sprint`, etc.)
+- `documentId` — the document's UUID
+- `projectId` — the parent project ID (if the document belongs to a project)
+
+The `context` node (first in the graph) resolves all of this into a `viewDescription` string (e.g., "Dev User is viewing issue #27 in project Core Features (path: /issues/b9921f8d)"). This description is injected into the reasoning node's LLM system prompt so the agent:
+
+- **Scopes analysis** to what the user is looking at (issue-specific, sprint-specific, etc.)
+- **Personalizes responses** using the user's identity (e.g., "Your 3 assigned issues are stale" vs generic "3 issues are stale")
+- **Narrows project context** using `projectId` to filter findings to the relevant project
+
+**Examples:**
+- User "Alice" on `/issues/b9921f8d` → agent focuses on that issue's staleness, assignee workload, and related findings, and knows Alice is the one asking
+- User on `/projects/abc` with `projectId: abc` → agent scopes sprint health and issue analysis to project ABC only
+- User on `/dashboard` with no entity → agent gives a personalized overview of that user's assigned work and team status
 
 ---
 
@@ -84,7 +107,7 @@ graph TD
 
 | Node | Type | Description |
 |------|------|-------------|
-| `context` | **Context** | Resolves who is invoking the graph, what they are looking at (entity type, ID, pathname), and produces a view description for downstream LLM prompts. Pure function, no API calls. |
+| `context` | **Context** | Resolves who is invoking the graph (userId, userName, userEmail), what they are looking at (entityType, entityId, pathname), and the document state from Ship's React context (documentType, documentId, projectId). Produces a view description for downstream LLM prompts. Pure function, no API calls. |
 | `fetch` | **Fetch** | Pulls issues, weeks, team members, and standups from Ship REST API in parallel via `Promise.all`. Standups fetched for active sprint only. Sets `fetchError` flag on failure. |
 | `analyze` | **Detection (rule-based)** | Runs 8 pure-function detectors: stale issues, sprint health, unassigned high-priority, missed standups, overdue issues, work distribution, scope creep, no sprint plan. Computes aggregate severity. |
 | `reason` | **Reasoning (LLM)** | The LLM performs actual analysis — not formatting or summarizing. It identifies relationships between findings (e.g., "Alice is overloaded AND her issues are stale — root cause is capacity"), assesses compound risk, prioritizes actions, and surfaces non-obvious patterns. For on-demand mode, incorporates the user's question into the reasoning. |
@@ -110,7 +133,7 @@ graph TD
 
 ```typescript
 {
-  input: FleetRequestInput,   // mode, target, message?, context?
+  input: FleetRequestInput,   // mode, target, message?, context? (includes userId, userName, userEmail, documentType, documentId, projectId)
   issues: ShipIssue[],        // fetched from Ship API
   weeks: ShipWeek[],          // fetched from Ship API
   standups: ShipStandup[],    // fetched for active sprint
