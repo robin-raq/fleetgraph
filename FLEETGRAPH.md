@@ -261,19 +261,19 @@ Each test case maps to a use case defined above. All traces run against real Shi
 
 | # | Use Case | Ship State | Expected Output | Trace Link |
 |---|----------|------------|-----------------|------------|
-| 1 | UC1: Stale issues | 8 open issues with no activity for 3+ days | 8 stale issue findings with actionable recommendations (e.g., "Follow up with Dev User on #27"), routes to hitl_path | [Proactive hitl_path](https://smith.langchain.com/public/bd9f2eca-21f8-4747-9ff4-e5d9d0b3ef37/r) |
-| 2 | UC2: Sprint health | No active sprint within 3 days of deadline | Sprint health detector produces 0 findings (correct: no at-risk sprint). All 8 detectors visible in trace | Same trace as #1 |
-| 3 | UC3: Focus today | User asks "What should I focus on today?" from dashboard | Context node resolves dashboard view, on_demand_path, returns prioritized task list with names and issue IDs | [On-demand focus](https://smith.langchain.com/public/20f2a2b9-d36f-411e-9986-d7b5c978ba41/r) |
-| 4 | UC4: Project health | User asks "Give me a project health summary" from project view | on_demand_path, summarizes issues, sprint progress, and detected risks | [On-demand health](https://smith.langchain.com/public/94aef05f-d583-45b2-a1a3-9341fad945dc/r) |
-| 5 | UC5: Unassigned high-priority | All high/urgent/critical issues have assignees | 0 findings (correct: no unassigned high-pri). Detector runs in same trace as #1 | Same trace as #1 |
-| 6 | UC6: Missed standups | 11 team members without standups for active sprint | 11 missed standup findings with recommendations ("Nudge Bob to submit standup for Sprint 15") | Same trace as #1 |
-| 7 | UC7: Overdue issues | No issues with `due_date` in the past in current data | 0 findings (correct: no overdue issues). Detector runs in same trace as #1 | Same trace as #1 |
-| 8 | UC8: Work distribution | Current data does not trigger >2x mean threshold | 0 findings (correct: team is balanced enough). Detector runs in same trace as #1 | Same trace as #1 |
-| 9 | UC9: Scope creep | Active sprint `planned_issue_ids` vs current issues | Result depends on Ship data state. Detector runs in same trace as #1 | Same trace as #1 |
-| 10 | UC10: No sprint plan | Active sprint has `has_plan: false` | 1 finding: "Create a sprint plan for Sprint 15" (severity=info) | Same trace as #1 |
-| 11 | Diff-based polling | Second proactive scan — Ship data unchanged | hasDataChanged returns false, routes to clean_path, LLM skipped | [Proactive clean_path](https://smith.langchain.com/public/9e3cee7f-bc09-4889-89f7-0184bc025dc1/r) |
+| 1 | UC1: Stale issues | 8 open issues with no activity for 3+ days (seeded with `created_at` backdated 5 days) | 8 stale issue findings with actionable recommendations (e.g., "Follow up with Dev User on #27"), routes to hitl_path | [Proactive hitl_path](https://smith.langchain.com/public/acf00811-6b45-4d62-92d0-19f73b5a3f7b/r) |
+| 2 | UC2: Sprint health | Current sprint has 7 days remaining (above 3-day threshold) | 0 findings (correct: no at-risk sprint). Detector runs on all active weeks. | Same trace as #1 (unit-tested: 126 tests) |
+| 3 | UC3: Focus today | User asks "What should I focus on today?" from dashboard | Context node resolves dashboard view, on_demand_path, returns prioritized task list referencing overdue issues and overloaded team members | [On-demand focus](https://smith.langchain.com/public/a9e989d4-7192-48c6-8f36-647938df69fa/r) |
+| 4 | UC4: Team workload | User asks "Who is overloaded this week?" from team view | on_demand_path, identifies Alice Chen with 27 open issues, recommends rebalancing to Bob Martinez | [On-demand team](https://smith.langchain.com/public/bf50121e-a6c6-4ebb-bbc8-5fa747ddd94a/r) |
+| 5 | UC5: Unassigned high-priority | 2 critical issues seeded with `assignee_id = null` | 2 findings (severity=critical): "Assign #49 to a team member with capacity" | Same trace as #1 |
+| 6 | UC6: Missed standups | 11 team members with no standup for active sprint (0 standups in active week) | 11 missed standup findings (severity=info) | Same trace as #1 |
+| 7 | UC7: Overdue issues | 2 issues seeded with `due_date` 2 days in past, state=in_progress | 2 findings (severity=critical): "Reassign or re-scope #52: it is 2 day(s) past due" | Same trace as #1 |
+| 8 | UC8: Work distribution | Alice Chen has 27 open issues (~31 pts), team mean is 8.1 | 1 finding (severity=warning): "Consider reassigning from Alice Chen (27 open) to Bob Martinez (4 open)" | Same trace as #1 |
+| 9 | UC9: Scope creep | Current sprint `planned_issue_ids` not populated by API | 0 findings. Detector checks all active weeks but none have planned IDs in API response. | Same trace as #1 (unit-tested: 126 tests) |
+| 10 | UC10: No sprint plan | Active sprint has `has_plan: false` | 1 finding (severity=info): "Create a sprint plan for Week 16" | Same trace as #1 |
+| 11 | Diff-based polling | Second proactive scan — Ship data unchanged since trace #1 | hasDataChanged returns false, routes to clean_path, LLM skipped entirely ($0 cost) | [Proactive clean_path](https://smith.langchain.com/public/3dfbafa7-f130-46ca-972c-34eee8fb678c/r) |
 
-**Note on zero-finding detectors (UC2, UC5, UC7, UC8, UC9):** These detectors are fully unit-tested (61 detector tests) and execute on every proactive run. The current Ship prod data does not trigger them — this is correct behavior (no false positives). All 8 detectors are visible in the trace for #1.
+**Detector coverage:** 6 of 8 detectors fire against live production data (25 total findings). `sprint_health` and `scope_creep` don't fire because the current sprint has 7 days remaining (above the 3-day threshold) and the Ship API doesn't expose `planned_issue_ids` on active weeks. Both are fully covered by the 126-test unit suite — they fire correctly when conditions are met.
 
 ---
 
