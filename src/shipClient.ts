@@ -165,7 +165,9 @@ export class ShipClient {
     try {
       const payload = await this.get<unknown>("/api/team/people");
       return mapRows<ShipTeamMember>(payload, "people", (row) => ({
-        id: pickString(row, ["id"]) ?? "",
+        // Ship returns person doc ID as `id` and user ID as `user_id`.
+        // Issues reference assignee by user_id, so use that for matching.
+        id: pickString(row, ["user_id", "userId"]) || pickString(row, ["id"]) || "",
         name: pickString(row, ["name", "display_name", "displayName"]) ?? "Unknown"
       }), (m) => !!m.id);
     } catch (error) {

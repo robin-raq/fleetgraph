@@ -62,27 +62,31 @@ export function staleIssueFindings(issues: ShipIssue[], nowMs: number = Date.now
 }
 
 export function sprintHealthFindings(weeks: ShipWeek[], issues: ShipIssue[], nowMs: number = Date.now()): Finding[] {
-  const activeWeek = weeks.find(isActiveWeek);
-  if (!activeWeek) return [];
+  const activeWeeks = weeks.filter(isActiveWeek);
+  if (activeWeeks.length === 0) return [];
 
   const openIssues = issues.filter((issue) => !DONE_STATES.includes((issue.state ?? "").toLowerCase())).length;
-  const endDate = toDate(activeWeek.end_date);
-  if (!endDate) return [];
+  if (openIssues < 8) return [];
 
-  const daysRemaining = Math.ceil((endDate.getTime() - nowMs) / (1000 * 60 * 60 * 24));
-  if (daysRemaining > 3 || openIssues < 8) return [];
+  const findings: Finding[] = [];
+  for (const week of activeWeeks) {
+    const endDate = toDate(week.end_date);
+    if (!endDate) continue;
 
-  return [
-    {
-      id: `sprint-health-${activeWeek.id}`,
+    const daysRemaining = Math.ceil((endDate.getTime() - nowMs) / (1000 * 60 * 60 * 24));
+    if (daysRemaining > 3) continue;
+
+    findings.push({
+      id: `sprint-health-${week.id}`,
       category: "sprint_health" as const,
       severity: "warning" as const,
-      title: `Sprint health risk: ${activeWeek.title ?? activeWeek.id}`,
+      title: `Sprint health risk: ${week.title ?? week.id}`,
       detail: `${openIssues} issues are still open with ${Math.max(daysRemaining, 0)} day(s) left in the active sprint.`,
-      entityIds: [activeWeek.id],
+      entityIds: [week.id],
       recommendation: `Cut scope or extend sprint — ${openIssues} open issues with ${Math.max(daysRemaining, 0)} day(s) remaining.`
-    }
-  ];
+    });
+  }
+  return findings;
 }
 
 export function unassignedHighPriorityFindings(issues: ShipIssue[]): Finding[] {
@@ -162,27 +166,30 @@ export function overdueIssueFindings(issues: ShipIssue[], nowMs: number = Date.n
 }
 
 export function scopeCreepFindings(weeks: ShipWeek[], issues: ShipIssue[]): Finding[] {
-  const activeWeek = weeks.find(isActiveWeek);
-  if (!activeWeek || !activeWeek.planned_issue_ids?.length) return [];
+  const activeWeeks = weeks.filter((w) => isActiveWeek(w) && w.planned_issue_ids?.length);
+  const findings: Finding[] = [];
 
-  const plannedSet = new Set(activeWeek.planned_issue_ids);
-  const sprintIssues = issues.filter((issue) =>
-    issue.belongs_to?.some((b) => b.id === activeWeek.id && b.type === "sprint")
-  );
-  const added = sprintIssues.filter((issue) => !plannedSet.has(issue.id));
+  for (const activeWeek of activeWeeks) {
+    const plannedSet = new Set(activeWeek.planned_issue_ids!);
+    const sprintIssues = issues.filter((issue) =>
+      issue.belongs_to?.some((b) => b.id === activeWeek.id && b.type === "sprint")
+    );
+    const added = sprintIssues.filter((issue) => !plannedSet.has(issue.id));
 
-  if (added.length <= 2) return [];
+    if (added.length <= 2) continue;
 
-  const titles = added.slice(0, 5).map((i) => i.title).join(", ");
-  return [{
-    id: `scope-creep-${activeWeek.id}`,
-    category: "scope_creep" as const,
-    severity: "warning" as const,
-    title: `Scope creep: ${added.length} unplanned issues in ${activeWeek.title ?? activeWeek.id}`,
-    detail: `${added.length} issues were added to ${activeWeek.title ?? activeWeek.id} after sprint planning (${plannedSet.size} originally planned).`,
-    entityIds: [activeWeek.id, ...added.map((i) => i.id)],
-    recommendation: `Consider deferring ${titles} to the next sprint to protect the sprint goal.`
-  }];
+    const titles = added.slice(0, 5).map((i) => i.title).join(", ");
+    findings.push({
+      id: `scope-creep-${activeWeek.id}`,
+      category: "scope_creep" as const,
+      severity: "warning" as const,
+      title: `Scope creep: ${added.length} unplanned issues in ${activeWeek.title ?? activeWeek.id}`,
+      detail: `${added.length} issues were added to ${activeWeek.title ?? activeWeek.id} after sprint planning (${plannedSet.size} originally planned).`,
+      entityIds: [activeWeek.id, ...added.map((i) => i.id)],
+      recommendation: `Consider deferring ${titles} to the next sprint to protect the sprint goal.`
+    });
+  }
+  return findings;
 }
 
 export function workDistributionFindings(issues: ShipIssue[], teamMembers: ShipTeamMember[]): Finding[] {
