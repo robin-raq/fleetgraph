@@ -2,24 +2,36 @@
 
 A Project Intelligence Agent for [Ship](https://ship-app-production.up.railway.app) — monitors project health proactively, answers questions on demand, and always waits for human approval before acting.
 
-**Live:** https://fleetgraph-production-89ba.up.railway.app/test.html
-**Ship app (with embedded FleetGraph):** https://ship-app-production.up.railway.app/login
-**Traces:** [Proactive hitl_path (25 findings)](https://smith.langchain.com/public/acf00811-6b45-4d62-92d0-19f73b5a3f7b/r) · [On-demand focus](https://smith.langchain.com/public/a9e989d4-7192-48c6-8f36-647938df69fa/r) · [On-demand team](https://smith.langchain.com/public/bf50121e-a6c6-4ebb-bbc8-5fa747ddd94a/r) · [Diff-based skip](https://smith.langchain.com/public/3dfbafa7-f130-46ca-972c-34eee8fb678c/r)
+## Try It
 
-## Ship Login Credentials
+### Embedded in Ship (production)
 
-FleetGraph is embedded inside Ship's sidebar. Log in to Ship to use it:
+The full experience: FleetGraph embedded as a sidebar chat inside the Ship app, context-aware based on what page you're viewing.
 
-| Role | Email | Password | Access |
-|------|-------|----------|--------|
-| **Admin (super-admin)** | `dev@ship.local` | `admin123` | Full access, workspace management, all features |
-| Alice Chen | `alice.chen@ship.local` | `admin123` | Team member |
-| Bob Martinez | `bob.martinez@ship.local` | `admin123` | Team member |
-| Carol Williams | `carol.williams@ship.local` | `admin123` | Team member |
-| David Kim | `david.kim@ship.local` | `admin123` | Team member |
-| + 6 more team members | `{first}.{last}@ship.local` | `admin123` | Team member |
+> **URL:** https://ship-app-production.up.railway.app/login
+>
+> **Login:** `dev@ship.local` / `admin123` (admin) or any team member below
+>
+> After logging in, click the **⚡ lightning bolt icon** in the bottom-left sidebar to open FleetGraph.
 
-After logging in, click the **lightning bolt icon** in the bottom-left sidebar to open FleetGraph.
+| Role | Email | Password |
+|------|-------|----------|
+| **Admin (super-admin)** | `dev@ship.local` | `admin123` |
+| Alice Chen | `alice.chen@ship.local` | `admin123` |
+| Bob Martinez | `bob.martinez@ship.local` | `admin123` |
+| Carol Williams | `carol.williams@ship.local` | `admin123` |
+| David Kim | `david.kim@ship.local` | `admin123` |
+| + 6 more team members | `{first}.{last}@ship.local` | `admin123` |
+
+### Standalone Test Harness
+
+Direct access to FleetGraph's API without Ship. Useful for testing proactive scans, viewing approvals, and running on-demand queries independently.
+
+> **URL:** https://fleetgraph-production-89ba.up.railway.app/test.html
+
+### LangSmith Traces
+
+> [Proactive hitl_path (25 findings)](https://smith.langchain.com/public/acf00811-6b45-4d62-92d0-19f73b5a3f7b/r) · [On-demand focus](https://smith.langchain.com/public/a9e989d4-7192-48c6-8f36-647938df69fa/r) · [On-demand team](https://smith.langchain.com/public/bf50121e-a6c6-4ebb-bbc8-5fa747ddd94a/r) · [Diff-based skip](https://smith.langchain.com/public/3dfbafa7-f130-46ca-972c-34eee8fb678c/r)
 
 ---
 
