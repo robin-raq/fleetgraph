@@ -90,7 +90,7 @@ export class ShipClient {
   }
 
   async fetchIssues(): Promise<ShipIssue[]> {
-    const payload = await this.get<unknown>("/api/issues");
+    const payload = await this.get<unknown>("/api/issues?limit=500");
     return mapRows<ShipIssue>(payload, "issues", (row) => ({
       id: pickString(row, ["id"]) ?? "",
       title: pickString(row, ["title", "name"]) ?? "Untitled issue",
@@ -117,21 +117,32 @@ export class ShipClient {
 
   async fetchWeeks(): Promise<ShipWeek[]> {
     const payload = await this.get<unknown>("/api/weeks");
-    return mapRows<ShipWeek>(payload, "weeks", (row) => ({
-      id: pickString(row, ["id"]) ?? "",
-      title: pickString(row, ["title", "name"]),
-      start_date: pickString(row, ["start_date", "startDate"]),
-      end_date: pickString(row, ["end_date", "endDate"]),
-      status: pickString(row, ["status", "state"]),
-      issue_count: typeof row.issue_count === "number" ? row.issue_count : undefined,
-      completed_count: typeof row.completed_count === "number" ? row.completed_count : undefined,
-      started_count: typeof row.started_count === "number" ? row.started_count : undefined,
-      has_plan: typeof row.has_plan === "boolean" ? row.has_plan : undefined,
-      days_remaining: typeof row.days_remaining === "number" ? row.days_remaining : undefined,
-      planned_issue_ids: Array.isArray(row.planned_issue_ids)
-        ? (row.planned_issue_ids as unknown[]).filter((id): id is string => typeof id === "string")
-        : undefined
-    }), (week) => !!week.id);
+    return mapRows<ShipWeek>(payload, "weeks", (row) => {
+      // Ship API returns days_remaining but not always start_date/end_date.
+      // Compute end_date from days_remaining when missing so sprint_health detector works.
+      let endDate = pickString(row, ["end_date", "endDate"]);
+      const daysRemaining = typeof row.days_remaining === "number" ? row.days_remaining : undefined;
+      if (!endDate && daysRemaining !== undefined) {
+        const end = new Date();
+        end.setDate(end.getDate() + daysRemaining);
+        endDate = end.toISOString().split("T")[0];
+      }
+      return {
+        id: pickString(row, ["id"]) ?? "",
+        title: pickString(row, ["title", "name"]),
+        start_date: pickString(row, ["start_date", "startDate"]),
+        end_date: endDate,
+        status: pickString(row, ["status", "state"]),
+        issue_count: typeof row.issue_count === "number" ? row.issue_count : undefined,
+        completed_count: typeof row.completed_count === "number" ? row.completed_count : undefined,
+        started_count: typeof row.started_count === "number" ? row.started_count : undefined,
+        has_plan: typeof row.has_plan === "boolean" ? row.has_plan : undefined,
+        days_remaining: daysRemaining,
+        planned_issue_ids: Array.isArray(row.planned_issue_ids)
+          ? (row.planned_issue_ids as unknown[]).filter((id): id is string => typeof id === "string")
+          : undefined
+      };
+    }, (week) => !!week.id);
   }
 
   async fetchStandups(weekId: string): Promise<ShipStandup[]> {
